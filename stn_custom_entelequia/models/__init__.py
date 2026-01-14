@@ -1,0 +1,5 @@
+from . import stings_key
+from . import res_partner
+from . import product_template
+from . import stock_quant
+from . import uom_uom

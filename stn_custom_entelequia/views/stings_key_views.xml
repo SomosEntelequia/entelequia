@@ -1,0 +1,50 @@
+﻿<odoo>
+    <record id="view_stings_key_list" model="ir.ui.view">
+        <field name="name">stings.key.list</field>
+        <field name="model">stings.key</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name" />
+                <field name="key" />
+                <field name="active" />
+            </list>
+        </field>
+    </record>
+
+    <record id="view_stings_key_form" model="ir.ui.view">
+        <field name="name">stings.key.form</field>
+        <field name="model">stings.key</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="name" />
+                        <field name="key"/>
+                        <field name="secret_key"/>
+                        <field name="active" />
+                        <field name="notes" />
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Acción primero -->
+    <record id="action_stings_keys" model="ir.actions.act_window">
+        <field name="name">API Keys</field>
+        <field name="res_model">stings.key</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- Menú raíz -->
+    <menuitem id="menu_stings_root"
+        name="Stings"
+        parent="base.menu_custom"
+        sequence="10" />
+
+    <!-- Menú hijo con action ya definido -->
+    <menuitem id="menu_stings_keys"
+        name="API Keys"
+        parent="menu_stings_root"
+        action="action_stings_keys" />
+</odoo>
