@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_sap_price_list_user,access.sap.price.list.user,model_sap_price_list,sales_team.group_sale_salesman,1,1,1,0
+access_sap_price_list_manager,access.sap.price.list.manager,model_sap_price_list,sales_team.group_sale_manager,1,1,1,1
+access_sap_price_list_line_user,access.sap.price.list.line.user,model_sap_price_list_line,sales_team.group_sale_salesman,1,1,1,0
+access_sap_price_list_line_manager,access.sap.price.list.line.manager,model_sap_price_list_line,sales_team.group_sale_manager,1,1,1,1
