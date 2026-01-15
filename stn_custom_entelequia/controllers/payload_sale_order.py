@@ -88,12 +88,17 @@ class SaleOrder(models.Model):
             sap_pl_id = ""
             if hasattr(self, 'sap_price_list_id') and self.sap_price_list_id:
                 sap_pl_id = self.sap_price_list_id.id_secundario_sap or ""
-                
+            # 1. Obtenemos la unidad de medida de la línea
+            uom = line.product_uom_id
+            
+            # 2. Navegamos al campo unspsc_code_id y luego a su campo 'code'            
+            sat_code = uom.unspsc_code_id.code if uom.unspsc_code_id else ''
+            
             lines.append({
                 "LineId": str(counter),
                 "ItemCode": line.product_id.id_secundario_sap or "", # ID SAP del producto
                 "Quantity": int(line.product_uom_qty),
-                "UomEntry": 2, 
+                "UomEntry":  sat_code, 
                 "Price": round(line.price_unit, 2),
                 "TaxCode": self._get_sap_tax_code(tax_record),
                 "Warehouse": self.warehouse_id.name or "ALM-GRAL",
