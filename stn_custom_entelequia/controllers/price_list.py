@@ -53,7 +53,7 @@ class ApiController(http.Controller):
 
         sap_list_id = str(list_data.get('id_secundario_sap'))
         
-        # 3. Buscar o Crear la Cabecera de la Lista de Precios
+        # 3. Buscar o Crear la Cabecera
         price_list = request.env['sap.price.list'].sudo().search([
             ('id_secundario_sap', '=', sap_list_id)
         ], limit=1)
@@ -69,22 +69,38 @@ class ApiController(http.Controller):
         else:
             price_list = request.env['sap.price.list'].sudo().create(list_vals)
 
-        # 4. Procesar Líneas con id_secundario_sap_line
+        # 4. Procesar Líneas
         lines_data = list_data.get('lines', [])
         results = {"created": 0, "updated": 0, "errors": []}
 
         for l_data in lines_data:
             try:
-                line_sap_id = l_data.get('id_secundario_sap_line') # ID Único de línea SAP
+                line_sap_id = l_data.get('id_secundario_sap_line')
                 product_sap_id = l_data.get('product_id_sap')
-                uom_id_odoo = l_data.get('uom_id')
+                # Recibimos el código o nombre, ej: "X4G"
+                uom_input = l_data.get('uom_id') 
                 price = float(l_data.get('price_unit', 0))
 
                 if not line_sap_id:
-                    results["errors"].append("Missing id_secundario_sap_line in line data")
+                    results["errors"].append("Missing id_secundario_sap_line")
                     continue
 
-                # Buscar el producto por su ID SAP
+                # --- LÓGICA DE BÚSQUEDA DE UOM ---
+                odoo_uom = False
+                if uom_input:
+                    # Buscamos por nombre o por el código UNSPSC si lo usas
+                    odoo_uom = request.env['uom.uom'].sudo().search([
+                        '|', 
+                        ('name', '=', str(uom_input)),
+                        ('unspsc_code_id.code', '=', str(uom_input)) # Común en localización MX
+                    ], limit=1)
+                
+                if not odoo_uom:
+                    results["errors"].append(f"UoM '{uom_input}' not found for line {line_sap_id}")
+                    continue
+                # --------------------------------
+
+                # Buscar el producto
                 product = request.env['product.product'].sudo().search([
                     ('id_secundario_sap', '=', product_sap_id)
                 ], limit=1)
@@ -93,7 +109,7 @@ class ApiController(http.Controller):
                     results["errors"].append(f"Product SAP ID {product_sap_id} not found")
                     continue
 
-                # BUSQUEDA POR ID SECUNDARIO DE LÍNEA
+                # Buscar línea existente
                 line = request.env['sap.price.list.line'].sudo().search([
                     ('id_secundario_sap_line', '=', line_sap_id)
                 ], limit=1)
@@ -101,7 +117,7 @@ class ApiController(http.Controller):
                 line_vals = {
                     'price_list_id': price_list.id,
                     'product_id': product.id,
-                    'uom_id': int(uom_id_odoo),
+                    'uom_id': odoo_uom.id, # Usamos el ID de Odoo encontrado
                     'price_unit': price,
                     'id_secundario_sap_line': line_sap_id
                 }

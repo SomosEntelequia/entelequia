@@ -70,6 +70,7 @@ class ApiUomController(http.Controller):
                     'cantidad_base_sap': base_qty,
                     'cantidad_de_equivalencia': alt_qty,
                     'relative_factor': float(factor_calculado),
+                    'alt_code':alt_code,
                 }
 
                 # Asignación del relative_uom_id

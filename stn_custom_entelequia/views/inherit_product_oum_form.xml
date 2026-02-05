@@ -5,13 +5,13 @@
         <field name="inherit_id" ref="uom.product_uom_form_view"/>
         <field name="arch" type="xml">
 
-            <!-- ✅ Este campo sí existe -->
+            <!-- Este campo sí existe -->
             <xpath expr="//field[@name='name']" position="after">
                 <field name="grupo_de_unidad_de_medida_sap"/>
                 <field name="cantidad_base_sap"/>
             </xpath>
 
-            <!-- ✅ Este div sí existe también -->
+            <!-- Este div sí existe también -->
             <xpath expr="//div[@name='relative_factor']" position="after">
                 <field name="cantidad_de_equivalencia"/>
             </xpath>

@@ -3,3 +3,7 @@ from . import res_partner
 from . import product_template
 from . import stock_quant
 from . import uom_uom
+from . import product_category
+from . import sale_order
+from . import res_users
+from . import account_payment_term

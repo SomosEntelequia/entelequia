@@ -2,294 +2,405 @@
 from odoo import http, SUPERUSER_ID
 from odoo.http import request, Response
 import json
+import logging
 
-# ============================================
-#   CONFIGURACIÓN CORS
-# ============================================
+_logger = logging.getLogger(__name__)
+
 ALLOWED_ORIGIN = "*"
 
-def make_cors_headers():
-    return [
-        ('Access-Control-Allow-Origin', ALLOWED_ORIGIN),
-        ('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PATCH'),
-        ('Access-Control-Allow-Headers', 'Content-Type, apiKey, secretKey'),
-        ('Access-Control-Allow-Credentials', 'true'),
-        ('Access-Control-Max-Age', '3600'),
-    ]
-
-# ============================================
-#   CONTROLADOR PRINCIPAL
-# ============================================
 class ApiController(http.Controller):
 
     def _create_response(self, data, status_code):
-        headers = make_cors_headers()
-        headers.append(('Content-Type', 'application/json'))
+        headers = [
+            ('Access-Control-Allow-Origin', ALLOWED_ORIGIN),
+            ('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PATCH'),
+            ('Access-Control-Allow-Headers', 'Content-Type, apiKey, secretKey'),
+            ('Access-Control-Allow-Credentials', 'true'),
+            ('Content-Type', 'application/json')
+        ]
         return Response(json.dumps(data), status=status_code, headers=headers)
 
     def _validate_auth(self):
-        """Valida las llaves de API y devuelve el registro si es exitoso."""
         api_key = request.httprequest.headers.get('apiKey')
         secret_key = request.httprequest.headers.get('secretKey')
-
         if not api_key or not secret_key:
-            return None, "Missing required headers (apiKey and/or secretKey)", 400
-
-        # Usamos sudo() y SUPERUSER_ID para evitar problemas de sesión en auth='none'
-        api_record = request.env['stings.key'].sudo().with_user(SUPERUSER_ID).search([
+            return None, "Missing headers", 400
+        api_record = request.env['stings.key'].sudo().search([
             ('key', '=', api_key),
             ('secret_key', '=', secret_key)
         ], limit=1)
-
         if not api_record:
-            return None, "Invalid API Key or Secret Key", 401
-
+            return None, "Invalid Keys", 401
         return api_record, None, 200
+
+    def _get_contact_type_logic(self, contact_data, id_secondary):
+        """
+        Lógica unificada para determinar is_company, parent_id y el type de Odoo.
+        
+        REGLA CLAVE:
+        - Si tiene parent_id → ES HIJO (el id_secondary es solo informativo/respaldo del padre)
+        - Si NO tiene parent_id → ES PADRE (el id_secondary es su identificador único)
+        """
+        raw_type = contact_data.get('company_type')
+        input_parent_id = contact_data.get('parent_id')
+        job_position = contact_data.get('job_position')
+        
+        _logger.info("="*80)
+        _logger.info("INICIANDO _get_contact_type_logic")
+        _logger.info(f"  - raw_type (company_type): {raw_type}")
+        _logger.info(f"  - input_parent_id: {input_parent_id}")
+        _logger.info(f"  - id_secondary: {id_secondary} (en hijos es solo respaldo del padre)")
+        _logger.info(f"  - job_position: {job_position}")
+        
+        valid_odoo_types = ['contact', 'delivery', 'invoice', 'other', 'private']
+        
+        final_parent_id = False
+        is_company_val = True
+        address_type = 'contact'
+
+        # 1. Si tiene parent_id, ES HIJO (sin importar el valor de id_secondary)
+        if input_parent_id:
+            _logger.info(f"  >>> Tiene parent_id='{input_parent_id}' - ES HIJO")
+            _logger.info(f"  >>> El id_secondary '{id_secondary}' es solo informativo (respaldo del padre)")
+            _logger.info(f"  >>> Buscando padre con id_secondary='{input_parent_id}'")
+            
+            parent_partner = request.env['res.partner'].sudo().search([
+                ('id_secondary', '=', input_parent_id),
+                ('parent_id', '=', False)
+            ], limit=1)
+            
+            if parent_partner:
+                final_parent_id = parent_partner.id
+                is_company_val = False
+                
+                _logger.info(f"  >>> PADRE ENCONTRADO: ID={parent_partner.id}, Name='{parent_partner.name}'")
+                
+                if raw_type in valid_odoo_types:
+                    address_type = raw_type
+                    _logger.info(f"  >>> Type asignado desde company_type: '{address_type}'")
+                elif raw_type == 'person':
+                    address_type = 'contact'
+                    _logger.info(f"  >>> company_type='person' -> Type='contact'")
+            else:
+                _logger.warning(f"  >>> ⚠️ PADRE NO ENCONTRADO con id_secondary='{input_parent_id}'")
+        else:
+            _logger.info(f"  >>> NO tiene parent_id - ES PADRE")
+            _logger.info(f"  >>> El id_secondary '{id_secondary}' es su identificador único")
+        
+        # 2. Si no tiene parent_id, es contacto padre
+        if not final_parent_id:
+            if raw_type == 'company':
+                is_company_val = True
+                address_type = 'contact'
+                _logger.info(f"  >>> Es PADRE tipo 'company'")
+            elif raw_type in ['person'] + valid_odoo_types or job_position:
+                is_company_val = False
+                address_type = raw_type if raw_type in valid_odoo_types else 'contact'
+                _logger.info(f"  >>> Es PADRE tipo 'person' o con job_position")
+
+        _logger.info(f"RESULTADO _get_contact_type_logic:")
+        _logger.info(f"  - is_company: {is_company_val}")
+        _logger.info(f"  - parent_id: {final_parent_id}")
+        _logger.info(f"  - address_type: {address_type}")
+        _logger.info("="*80)
+        
+        return is_company_val, final_parent_id, address_type
 
     @http.route('/api/create_contact', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def create_contact(self, **kwargs):
         if request.httprequest.method == 'OPTIONS':
             return self._create_response({}, 200)
 
-        # 1. Autenticación
-        api_record, error_msg, status = self._validate_auth()
-        if error_msg:
-            return self._create_response({"status": "error", "message": error_msg}, status)
-
-        # 2. Parsing de Datos
         try:
             data = json.loads(request.httprequest.data)
             contact_data = data.get('contact_data', {})
-        except Exception:
-            return self._create_response({"status": "error", "message": "Invalid JSON format"}, 400)
+            id_secondary = contact_data.get('id_secondary')
+            
+            _logger.info("\n" + "#"*100)
+            _logger.info("### API CREATE_CONTACT LLAMADA ###")
+            _logger.info(f"### id_secondary: {id_secondary}")
+            _logger.info(f"### name: {contact_data.get('name')}")
+            _logger.info(f"### company_type: {contact_data.get('company_type')}")
+            _logger.info(f"### parent_id: {contact_data.get('parent_id')}")
+            _logger.info("#"*100 + "\n")
+            
+            if not id_secondary or not contact_data.get('name'):
+                return self._create_response({'status': 'error', 'message': 'Missing name or id_secondary'}, 400)
 
-        # 3. Validación de campos mínimos
-        required_fields = ['name', 'id_secondary']
-        missing = [f for f in required_fields if not contact_data.get(f)]
-        if missing:
-            return self._create_response({'status': 'error', 'message': f'Missing: {", ".join(missing)}'}, 400)
+            # Lógica de tipo y jerarquía
+            is_company, parent_id, addr_type = self._get_contact_type_logic(contact_data, id_secondary)
 
-        # 4. Lógica de Dirección de Entrega (Shipping Partner)
-        # Si recibimos 'ref' en el JSON, buscamos al padre
-        parent_id = None
-        contact_type = 'contact'  # Por defecto es un contacto normal
+            # Localidad
+            locality_id = False
+            loc_name = contact_data.get('locality_name')
+            if loc_name:
+                loc = request.env['l10n_mx_edi.res.locality'].sudo().search([('name', 'ilike', loc_name)], limit=1)
+                if loc: 
+                    locality_id = loc.id
 
-        external_ref = contact_data.get('ref')
-        if external_ref:
-            # Buscamos al partner que tenga esa referencia única
-            parent_partner = request.env['res.partner'].sudo().with_user(SUPERUSER_ID).search([
-                ('ref', '=', external_ref)
-            ], limit=1)
-
-            if parent_partner:
-                parent_id = parent_partner.id
-                contact_type = 'delivery'  # Lo marcamos como dirección de entrega
-            else:
-                # Opcional: Si quieres que falle si no encuentra la referencia, descomenta:
-                # return self._create_response({'status': 'error', 'message': f'Parent with ref {external_ref} not found'}, 404)
-                pass
-
-        # 5. Creación
-        try:
-            new_contact = request.env['res.partner'].sudo().with_user(SUPERUSER_ID).with_context(
-                l10n_mx_edi_force_validate_vat=False
-            ).create({
-                'id_secondary': contact_data.get('id_secondary'),
-                'type': contact_type,  # 'delivery' si encontramos el padre por ref
-                'parent_id': parent_id,  # El ID interno de Odoo encontrado
-                'active': contact_data.get('active', True),
-                'company_type': 'person',  # Las direcciones suelen ser personas/localizaciones
+            # Construcción de valores para Odoo
+            vals = {
                 'name': contact_data.get('name'),
+                'is_company': is_company,
+                'parent_id': parent_id,
+                'type': addr_type,
+                'function': contact_data.get('job_position'),
                 'email': contact_data.get('email'),
                 'phone': contact_data.get('phone'),
                 'street': contact_data.get('street'),
                 'street2': contact_data.get('street2'),
-
-                'l10n_mx_edi_locality_id': contact_data.get('locality_id'),
-                'l10n_mx_edi_locality': contact_data.get('locality_name'),
-                'l10n_mx_edi_colony': contact_data.get('colony_name'),
-                'l10n_mx_edi_colony_code': contact_data.get('colony_code'),
-
-                'country_id': contact_data.get('country_id'),
-                'state_id': contact_data.get('state_id'),
-                'city_id': contact_data.get('city_id'),
                 'zip': contact_data.get('zip'),
                 'city': contact_data.get('city'),
-
+                
                 'vat': contact_data.get('vat'),
-                'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
-                'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
-                'l10n_mx_edi_payment_method_id': contact_data.get('l10n_mx_edi_payment_method_id'),
-                'property_payment_term_id': contact_data.get('property_payment_term_id'),
-                'lang': contact_data.get('lang', 'es_MX'),
                 'ref': contact_data.get('ref'),
-            })
+                'l10n_mx_edi_locality_id': locality_id,
+                'l10n_mx_edi_colony': contact_data.get('colony_name'),
+                'u_entrega_lunes': contact_data.get('u_entrega_lunes', 'No'),
+                'u_entrega_martes': contact_data.get('u_entrega_martes', 'No'),
+                'u_entrega_miercoles': contact_data.get('u_entrega_miercoles', 'No'),
+                'u_entrega_jueves': contact_data.get('u_entrega_jueves', 'No'),
+                'u_entrega_viernes': contact_data.get('u_entrega_viernes', 'No'),
+                'u_entrega_sabado': contact_data.get('u_entrega_sabado', 'No'),
+                'u_entrega_domingo': contact_data.get('u_entrega_domingo', 'No'),
+                'u_hora_entrega_inicio': contact_data.get('u_hora_entrega_inicio', 0),
+                'u_hora_entrega_fin': contact_data.get('u_hora_entrega_fin', 0),
+                'u_estatus_cliente': contact_data.get('u_estatus_cliente', '0'),
+                'u_dias_revision': contact_data.get('u_dias_revision', ''),
+                'u_sap_credit_limit': float(contact_data.get('credit_limit') or 0.0),
+                'u_sap_credit_balance': float(contact_data.get('credit_balance') or 0.0),
+                'u_sap_credit_available': float(contact_data.get('credit_available') or 0.0),
+                'u_sap_use_credit_limit': bool(contact_data.get('use_partner_credit_limit', True)),
+                'u_is_sap_client': True,
+                # Siempre guardamos id_secondary como respaldo (tanto en padres como en hijos)
+                'id_secondary': id_secondary,
+            }
+            # Agregar country_id si viene en el payload
+            if 'country_id' in contact_data and contact_data.get('country_id'):
+                vals['country_id'] = int(contact_data.get('country_id'))
 
-            print(
-                contact_data.get('id_secondary'),
-                contact_data.get('type'),
-                contact_data.get('parent_id'),
-                contact_data.get('active'),
-                contact_data.get('company_type'),
-                contact_data.get('name'),
-                contact_data.get('email'),
-                contact_data.get('phone'),
-                contact_data.get('street'),
-                contact_data.get('street2'),
-                contact_data.get('l10n_mx_edi_locality_id'),
-                contact_data.get('l10n_mx_edi_locality'),
-                contact_data.get('l10n_mx_edi_colony'),
-                contact_data.get('l10n_mx_edi_colony_code'),
-                contact_data.get('country_id'),
-                contact_data.get('state_id'),
-                contact_data.get('city_id'),
-                contact_data.get('zip'),
-                contact_data.get('vat'),
-                contact_data.get('l10n_mx_edi_usage'),
-                contact_data.get('l10n_mx_edi_fiscal_regime'),
-                contact_data.get('l10n_mx_edi_fiscal_regime'),
-                contact_data.get('l10n_mx_edi_payment_method_id'),
-                contact_data.get('property_payment_term_id'),
-                contact_data.get('lang'),
-                contact_data.get('property_prefayment_term_id'), 
-            )
+            # Agregar state_id si viene en el payload
+            if 'state_id' in contact_data and contact_data.get('state_id'):
+                vals['state_id'] = int(contact_data.get('state_id'))
+            
+            # Buscar usuario por salesPersonCode y asignar user_id
+            if 'salesPersonCode' in contact_data:
+                sales_person_code = contact_data.get('salesPersonCode')
+                if sales_person_code:
+                    user = request.env['res.users'].sudo().search([
+                        ('sap_sales_person_code', '=', int(sales_person_code))
+                    ], limit=1)
+                    
+                    if user:
+                        vals['user_id'] = user.id
+                        _logger.info(f"   👤 Vendedor asignado: {user.name} (código SAP: {sales_person_code})")
+                    else:
+                        _logger.warning(f"   ⚠️ No se encontró usuario con sap_sales_person_code={sales_person_code}")
+
+            partner_env = request.env['res.partner'].sudo().with_context(l10n_mx_edi_force_validate_vat=False)
+            
+            # --- LÓGICA DE BÚSQUEDA SEGÚN JERARQUÍA ---
+            existing = False
+            
+            _logger.info("\n" + "+"*80)
+            _logger.info("INICIANDO BÚSQUEDA DE CONTACTO EXISTENTE")
+            
+            if parent_id:
+                # ===== ES HIJO =====
+                _logger.info(f">>> RAMA: ES HIJO (parent_id={parent_id})")
+                _logger.info(f">>> Buscando hijo con:")
+                _logger.info(f"    - name = '{contact_data.get('name')}'")
+                _logger.info(f"    - parent_id = {parent_id}")
+                _logger.info(f">>> NOTA: El id_secondary '{id_secondary}' se guarda como respaldo pero NO se usa para búsqueda")
+                
+                existing = partner_env.search([
+                    ('name', '=', contact_data.get('name')),
+                    ('parent_id', '=', parent_id)
+                ], limit=1)
+                
+                if existing:
+                    _logger.info(f">>> ✓ HIJO ENCONTRADO:")
+                    _logger.info(f"    - ID: {existing.id}")
+                    _logger.info(f"    - Name: '{existing.name}'")
+                    _logger.info(f"    - Parent: {existing.parent_id.name if existing.parent_id else 'None'}")
+                    _logger.info(f"    - Type: {existing.type}")
+                    _logger.info(f"    - id_secondary (respaldo): {existing.id_secondary}")
+                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR HIJO")
+                else:
+                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO")
+                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO HIJO")
+                    
+            else:
+                # ===== ES PADRE =====
+                _logger.info(f">>> RAMA: ES PADRE (parent_id=False)")
+                _logger.info(f">>> Buscando padre con:")
+                _logger.info(f"    - id_secondary = '{id_secondary}'")
+                _logger.info(f"    - parent_id = False")
+                
+                existing = partner_env.search([
+                    ('id_secondary', '=', id_secondary),
+                    ('parent_id', '=', False)
+                ], limit=1)
+                
+                if existing:
+                    _logger.info(f">>> ✓ PADRE ENCONTRADO:")
+                    _logger.info(f"    - ID: {existing.id}")
+                    _logger.info(f"    - Name: '{existing.name}'")
+                    _logger.info(f"    - id_secondary: {existing.id_secondary}")
+                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR PADRE")
+                else:
+                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO")
+                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO PADRE")
+            
+            _logger.info("+"*80 + "\n")
+            
+            # Crear o actualizar
+            if existing:
+                _logger.info(f">>> EJECUTANDO: existing.write(vals)")
+                _logger.info(f">>> Contacto ID a actualizar: {existing.id}")
+                existing.write(vals)
+                action = "updated"
+                contact_id = existing.id
+            else:
+                _logger.info(f">>> EJECUTANDO: partner_env.create(vals)")
+                new_contact = partner_env.create(vals)
+                action = "created"
+                contact_id = new_contact.id
+                _logger.info(f">>> Nuevo contacto creado con ID: {contact_id}")
+            
+            _logger.info("\n" + "#"*100)
+            _logger.info("### RESULTADO FINAL ###")
+            _logger.info(f"### Acción: {action}")
+            _logger.info(f"### Contact ID: {contact_id}")
+            _logger.info(f"### Type: {addr_type}")
+            _logger.info(f"### Is Company: {is_company}")
+            _logger.info(f"### Parent ID: {parent_id}")
+            _logger.info("#"*100 + "\n")
 
             return self._create_response({
-                'status': 'success',
-                'contact_id': new_contact.id,
-                'parent_linked': parent_id is not None
-            }, 201)
+                'status': 'success', 
+                'contact_id': contact_id, 
+                'action': action, 
+                'type_applied': addr_type,
+                'is_company': is_company,
+                'parent_id': parent_id,
+                'is_child': bool(parent_id)
+            }, 200)
 
         except Exception as e:
+            _logger.error(f"❌ ERROR en create_contact: {str(e)}", exc_info=True)
             return self._create_response({"status": "error", "message": str(e)}, 500)
 
-    # Endpoint para actualizar un contacto utilizando el 'id_secondary'
-    @http.route('/api/update_contact',
-                type='http',
-                auth='none',
-                methods=['PATCH'],
-                csrf=False)
+    @http.route('/api/update_contact', type='http', auth='none', methods=['PATCH', 'OPTIONS'], csrf=False)
     def update_contact(self, **kwargs):
-        api_key = request.httprequest.headers.get('apiKey')
-        secret_key = request.httprequest.headers.get('secretKey')
-
-        # 1. Validar la clave de API
-        if not api_key or not secret_key:
-            return self._create_response(
-                {"status": "error",
-                    "message": "Missing required headers (apiKey and/or secretKey)"},
-                400
-            )
-
+        if request.httprequest.method == 'OPTIONS':
+            return self._create_response({}, 200)
+        
         try:
-            api_record = request.env['stings.key'].sudo().search(
-                [('key', '=', api_key), ('secret_key', '=', secret_key)], limit=1)
-            if not api_record:
-                return self._create_response(
-                    {"status": "error", "message": "Invalid API Key or Secret Key"},
-                    401
-                )
-        except Exception as e:
-            return self._create_response(
-                {"status": "error", "message": f"Authentication check failed: {e}"},
-                500
-            )
-
-        # 2. Obtener y decodificar los datos del cuerpo (Necesario para type='http')
-        try:
-            # Leemos y decodificamos el JSON del cuerpo de la solicitud
             data = json.loads(request.httprequest.data)
-        except json.JSONDecodeError:
-            return self._create_response(
-                {"status": "error", "message": "Invalid JSON payload format."},
-                400
-            )
-
-        contact_data = data.get('contact_data', {})
-
-        # 3. Validar los datos del contacto
-        if not contact_data or not isinstance(contact_data, dict):
-            return self._create_response(
-                {'status': 'error', 'message': 'No valid contact data provided in payload.'},
-                400
-            )
-
-        name = contact_data.get('name')
-        # Usamos el ID secundario para identificar el contacto
-        id_secondary = contact_data.get('id_secondary')
-
-        # Validación de campos esenciales
-        if not id_secondary or not name:
-            missing_fields = []
+            contact_data = data.get('contact_data', {})
+            id_secondary = contact_data.get('id_secondary')
+            
             if not id_secondary:
-                missing_fields.append('id_secondary')
-            if not name:
-                missing_fields.append('name')
+                return self._create_response({'status': 'error', 'message': 'Missing id_secondary'}, 400)
+            
+            # Lógica de tipo y jerarquía
+            is_company, parent_id, addr_type = self._get_contact_type_logic(contact_data, id_secondary)
+            
+            # Buscar el contacto según la misma lógica que create
+            partner_env = request.env['res.partner'].sudo()
+            existing = False
+            
+            if parent_id:
+                # ===== ES HIJO =====
+                _logger.info(f"UPDATE: Buscando hijo con name='{contact_data.get('name')}' y parent_id={parent_id}")
+                existing = partner_env.search([
+                    ('name', '=', contact_data.get('name')),
+                    ('parent_id', '=', parent_id)
+                ], limit=1)
+            else:
+                # ===== ES PADRE =====
+                _logger.info(f"UPDATE: Buscando padre con id_secondary='{id_secondary}'")
+                existing = partner_env.search([
+                    ('id_secondary', '=', id_secondary),
+                    ('parent_id', '=', False)
+                ], limit=1)
+            
+            if not existing:
+                return self._create_response({'status': 'error', 'message': 'Contact not found'}, 404)
 
-            return self._create_response(
-                {'status': 'error',
-                    'message': f'Missing required contact fields: {", ".join(missing_fields)}'},
-                400
-            )
+            # Para PATCH, solo actualizamos lo que viene en el JSON
+            update_vals = {
+                'is_company': is_company,
+                'parent_id': parent_id,
+                'type': addr_type,
+                'u_is_sap_client': True,
+                'id_secondary': id_secondary,  # Actualizar id_secondary como respaldo
+            }
+            
+            fields_to_map = {
+                'name': 'name',
+                'email': 'email',
+                'phone': 'phone',
+                'street': 'street',
+                'street2': 'street2',
+                'zip': 'zip',
+                'city': 'city',
+                'vat': 'vat',
+                'ref': 'ref',
+                'job_position': 'function',
+                'colony_name': 'l10n_mx_edi_colony',
+                'u_entrega_lunes': 'u_entrega_lunes',
+                'u_entrega_martes': 'u_entrega_martes',
+                'u_entrega_miercoles': 'u_entrega_miercoles',
+                'u_entrega_jueves': 'u_entrega_jueves',
+                'u_entrega_viernes': 'u_entrega_viernes',
+                'u_entrega_sabado': 'u_entrega_sabado',
+                'u_entrega_domingo': 'u_entrega_domingo',
+                'u_hora_entrega_inicio': 'u_hora_entrega_inicio',
+                'u_hora_entrega_fin': 'u_hora_entrega_fin',
+                'u_estatus_cliente': 'u_estatus_cliente',
+                'u_dias_revision': 'u_dias_revision',
+                'credit_limit': 'u_sap_credit_limit',
+                'credit_balance': 'u_sap_credit_balance',
+                'credit_available': 'u_sap_credit_available',
+                'use_partner_credit_limit': 'u_sap_use_credit_limit',
+            }
+            
+            for json_key, odoo_key in fields_to_map.items():
+                if json_key in contact_data:
+                    value = contact_data[json_key]
+                    
+                    if json_key in ['credit_limit', 'credit_balance', 'credit_available']:
+                        value = float(value or 0.0)
+                    elif json_key == 'use_partner_credit_limit':
+                        value = bool(value)
+                    
+                    update_vals[odoo_key] = value
+            # Country, State, City IDs
+            if 'country_id' in contact_data and contact_data.get('country_id'):
+                update_vals['country_id'] = int(contact_data.get('country_id'))
+            
+            if 'state_id' in contact_data and contact_data.get('state_id'):
+                update_vals['state_id'] = int(contact_data.get('state_id'))
+            if 'locality_name' in contact_data:
+                loc_name = contact_data.get('locality_name')
+                if loc_name:
+                    loc = request.env['l10n_mx_edi.res.locality'].sudo().search([('name', 'ilike', loc_name)], limit=1)
+                    if loc:
+                        update_vals['l10n_mx_edi_locality_id'] = loc.id
 
-        # Verificar si el contacto existe por 'id_secondary'
-        try:
-            existing_contact = request.env['res.partner'].sudo().search([
-                ('id_secondary', '=', id_secondary),
-            ], limit=1)
-
-            if not existing_contact:
-                return self._create_response(
-                    {'status': 'error',
-                        'message': f"Contact with id_secondary {id_secondary} not found"},
-                    404  # 404 Not Found
-                )
-
-            # No permitir la actualización del 'id_secondary' (lo dejamos igual)
-            # Eliminar el campo de 'id_secondary' si está presente en la solicitud
-            contact_data.pop('id_secondary', None)
-
-            # Actualizar el contacto con los nuevos datos
-            existing_contact.write({
-                'active': contact_data.get('active', True),
-                'company_type': contact_data.get('company_type'),
-                'name': contact_data.get('name'),
-                'email': contact_data.get('email'),
-                'phone': contact_data.get('phone'),
-                'parent_id': contact_data.get('parent_id'),
-                'street': contact_data.get('street'),
-                'street2': contact_data.get('street2'),
-
-                'l10n_mx_edi_locality_id': contact_data.get('locality_id'),
-                'l10n_mx_edi_locality': contact_data.get('locality_name'),
-                'l10n_mx_edi_colony_name': contact_data.get('colony_name'),
-                'l10n_mx_edi_colony_code': contact_data.get('colony_code'),
-
-                'city_id': contact_data.get('city_id'),
-                'city': contact_data.get('city'),
-                'state_id': contact_data.get('state_id'),
-                'zip': contact_data.get('zip'),
-                'country_id': contact_data.get('country_id'),
-
-                'vat': contact_data.get('vat'),
-                'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
-                'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
-                'l10n_mx_edi_payment_method_id': contact_data.get('l10n_mx_edi_payment_method_id'),
-                'property_payment_term_id': contact_data.get('property_payment_term_id'),
-                'property_product_pricelist': contact_data.get('property_product_pricelist'),
-                'user_id': contact_data.get('user_id'),
-                'lang': contact_data.get('lang', 'es_MX'),
-                'ref': contact_data.get('ref'),
-            })
-
-            return self._create_response(
-                {'status': 'success', 'contact_id': existing_contact.id},
-                200  # 200 OK
-            )
-
+            existing.with_context(l10n_mx_edi_force_validate_vat=False).write(update_vals)
+            
+            return self._create_response({
+                'status': 'success',
+                'contact_id': existing.id,
+                'type_applied': addr_type,
+                'is_company': is_company,
+                'parent_id': parent_id,
+                'is_child': bool(parent_id)
+            }, 200)
+            
         except Exception as e:
-            return self._create_response(
-                {"status": "error", "message": f"Update failed: {e}"},
-                500
-            )
-
+            _logger.error(f"Error en update_contact: {str(e)}", exc_info=True)
+            return self._create_response({"status": "error", "message": str(e)}, 500)

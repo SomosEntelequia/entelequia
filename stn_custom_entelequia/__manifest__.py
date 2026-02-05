@@ -16,8 +16,12 @@
     'data': [
         'security/ir.model.access.csv',
         'views/inherit_res_partner.xml',
+        'views/inherit_sale_order_line.xml',
+        'views/inherit_res_users.xml',
+        'views/inherit_sale_order.xml',
         'views/inherit_product_oum_form.xml',
         'views/inherit_stock_quant_editable.xml',
+        'views/inherit_account_payment_term.xml',
         'views/stings_key_views.xml',  
         'views/inherit_stock_quant_list_views.xml',
         'views/inherit_product_template.xml'

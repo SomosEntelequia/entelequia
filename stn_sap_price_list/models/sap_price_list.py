@@ -9,7 +9,8 @@ class SapPriceList(models.Model):
 
     name = fields.Char(string="Nombre de la lista de precios", required=True)
     active = fields.Boolean(default=True)
-    id_secundario_sap = fields.Char(string="Nombre de la lista de precios", required=True)
+    
+    id_secundario_sap = fields.Char(string="Nombre de la lista de precios")
     
     company_id = fields.Many2one(
         "res.company",
