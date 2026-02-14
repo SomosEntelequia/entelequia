@@ -151,6 +151,10 @@ class ApiController(http.Controller):
                 'street2': contact_data.get('street2'),
                 'zip': contact_data.get('zip'),
                 'city': contact_data.get('city'),
+                'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
+                'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
+                'l10n_mx_edi_payment_method_id': int(contact_data.get('l10n_mx_edi_payment_method_id')),
+                'property_payment_term_id': int(contact_data.get('property_payment_term_id')),
                 
                 'vat': contact_data.get('vat'),
                 'ref': contact_data.get('ref'),
@@ -174,6 +178,7 @@ class ApiController(http.Controller):
                 'u_is_sap_client': True,
                 # Siempre guardamos id_secondary como respaldo (tanto en padres como en hijos)
                 'id_secondary': id_secondary,
+                'lang': contact_data.get('lang', 'es_MX'),
             }
             # Agregar country_id si viene en el payload
             if 'country_id' in contact_data and contact_data.get('country_id'):
@@ -183,6 +188,13 @@ class ApiController(http.Controller):
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 vals['state_id'] = int(contact_data.get('state_id'))
             
+            # ✅ VALIDACIÓN PARA IDs (EVITA ERRORES)
+            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
+                vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+
+            if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
+                vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
+
             # Buscar usuario por salesPersonCode y asignar user_id
             if 'salesPersonCode' in contact_data:
                 sales_person_code = contact_data.get('salesPersonCode')
@@ -365,6 +377,8 @@ class ApiController(http.Controller):
                 'credit_balance': 'u_sap_credit_balance',
                 'credit_available': 'u_sap_credit_available',
                 'use_partner_credit_limit': 'u_sap_use_credit_limit',
+                'l10n_mx_edi_usage': 'l10n_mx_edi_usage',                    # Uso CFDI
+                'l10n_mx_edi_fiscal_regime': 'l10n_mx_edi_fiscal_regime',    # Régimen Fiscal
             }
             
             for json_key, odoo_key in fields_to_map.items():
@@ -383,6 +397,14 @@ class ApiController(http.Controller):
             
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
+                
+            # Campos fiscales que son IDs
+            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
+                update_vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+
+            if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
+                update_vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
+
             if 'locality_name' in contact_data:
                 loc_name = contact_data.get('locality_name')
                 if loc_name:
