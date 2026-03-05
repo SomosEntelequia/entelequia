@@ -424,11 +424,12 @@ class ApiController(http.Controller):
             #   update_vals['l10n_mx_edi_payment_method_id'] = payment_term.id if payment_term else False
            # Campos fiscales que son IDs
             # Campos fiscales que son IDs
+            # Campos fiscales que son IDs
             if contact_data.get('l10n_mx_edi_payment_method_id'):
-                sap_code = contact_data.get('l10n_mx_edi_payment_method_id')
+                sap_code = str(contact_data.get('l10n_mx_edi_payment_method_id'))  # ← convertir a string
                 _logger.info("================================================================================")
                 _logger.info("PROCESANDO l10n_mx_edi_payment_method_id (UPDATE)")
-                _logger.info("  - sap_code recibido: %s", sap_code)
+                _logger.info("  - sap_code recibido (convertido a str): %s", sap_code)
             
                 payment_term = request.env['account.payment.term'].sudo().search(
                     [('sap_payment_term_code', '=', sap_code)],
