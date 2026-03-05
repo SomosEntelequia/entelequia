@@ -422,7 +422,7 @@ class ApiController(http.Controller):
             #        limit=1
             #   )            
             #   update_vals['l10n_mx_edi_payment_method_id'] = payment_term.id if payment_term else False
-            if contact_data.get('property_payment_term_id'):
+            if contact_data.get('l10n_mx_edi_payment_method_id'):
                 sap_code = contact_data.get('property_payment_term_id')            
                 payment_term = request.env['account.payment.term'].sudo().search(
                     [('sap_payment_term_code', '=', sap_code)],
