@@ -138,11 +138,19 @@ class ApiController(http.Controller):
                 if loc: 
                     locality_id = loc.id
 
+            #sap_payment_code = contact_data.get('l10n_mx_edi_payment_method_id')
+            #payment_term = request.env['account.payment.term'].sudo().search(
+            #    [('sap_payment_term_code', '=', sap_payment_code)],
+            #    limit=1
+            #)
+        
             sap_payment_code = contact_data.get('l10n_mx_edi_payment_method_id')
+            
             payment_term = request.env['account.payment.term'].sudo().search(
                 [('sap_payment_term_code', '=', sap_payment_code)],
                 limit=1
             )
+            
             # Construcción de valores para Odoo
             vals = {
                 'name': contact_data.get('name'),
@@ -160,7 +168,7 @@ class ApiController(http.Controller):
                 'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
                 #'l10n_mx_edi_payment_method_id': int(contact_data.get('l10n_mx_edi_payment_method_id')),
                 'l10n_mx_edi_payment_method_id': payment_term.id if payment_term else False,
-                'property_payment_term_id': int(contact_data.get('property_payment_term_id')),
+                'property_payment_term_id': payment_term.id if payment_term else False,
                 
                 'vat': contact_data.get('vat'),
                 'ref': contact_data.get('ref'),
@@ -414,8 +422,8 @@ class ApiController(http.Controller):
             #        limit=1
             #   )            
             #   update_vals['l10n_mx_edi_payment_method_id'] = payment_term.id if payment_term else False
-            if contact_data.get('l10n_mx_edi_payment_method_id'):
-                sap_code = contact_data.get('l10n_mx_edi_payment_method_id')            
+            if contact_data.get('property_payment_term_id'):
+                sap_code = contact_data.get('property_payment_term_id')            
                 payment_term = request.env['account.payment.term'].sudo().search(
                     [('sap_payment_term_code', '=', sap_code)],
                     limit=1
