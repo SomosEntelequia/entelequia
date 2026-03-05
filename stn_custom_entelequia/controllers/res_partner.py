@@ -425,13 +425,24 @@ class ApiController(http.Controller):
            # Campos fiscales que son IDs
             if contact_data.get('l10n_mx_edi_payment_method_id'):
                 sap_code = contact_data.get('l10n_mx_edi_payment_method_id')
+                _logger.info("================================================================================")
+                _logger.info("PROCESANDO l10n_mx_edi_payment_method_id")
+                _logger.info("  - sap_code recibido: %s", sap_code)
             
                 payment_term = request.env['account.payment.term'].sudo().search(
                     [('sap_payment_term_code', '=', sap_code)],
                     limit=1
-                )        
+                )
+            
                 if payment_term:
+                    _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
+                                 payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
                     update_vals['property_payment_term_id'] = payment_term.id
+                    _logger.info("  - update_vals['property_payment_term_id'] = %s", payment_term.id)
+                else:
+                    _logger.warning("  - NO se encontró ningún account.payment.term con sap_payment_term_code='%s'", sap_code)
+            
+                _logger.info("================================================================================")
             #fin
             #if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
             #    update_vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
