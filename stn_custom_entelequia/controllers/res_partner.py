@@ -405,9 +405,16 @@ class ApiController(http.Controller):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
                 
             # Campos fiscales que son IDs
-            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
-                update_vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
-
+            #if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
+            #    update_vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):            
+                sap_code = contact_data.get('l10n_mx_edi_payment_method_id')            
+                payment_term = request.env['account.payment.term'].sudo().search(
+                    [('sap_payment_term_code', '=', sap_code)],
+                    limit=1
+                )            
+                update_vals['l10n_mx_edi_payment_method_id'] = payment_term.id if payment_term else False
+                
             if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
                 update_vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
 
