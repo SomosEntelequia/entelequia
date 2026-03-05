@@ -138,6 +138,11 @@ class ApiController(http.Controller):
                 if loc: 
                     locality_id = loc.id
 
+            sap_payment_code = contact_data.get('l10n_mx_edi_payment_method_id')
+            payment_term = request.env['account.payment.term'].sudo().search(
+                [('sap_payment_term_code', '=', sap_payment_code)],
+                limit=1
+            )
             # Construcción de valores para Odoo
             vals = {
                 'name': contact_data.get('name'),
@@ -153,7 +158,8 @@ class ApiController(http.Controller):
                 'city': contact_data.get('city'),
                 'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
                 'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
-                'l10n_mx_edi_payment_method_id': int(contact_data.get('l10n_mx_edi_payment_method_id')),
+                #'l10n_mx_edi_payment_method_id': int(contact_data.get('l10n_mx_edi_payment_method_id')),
+                'l10n_mx_edi_payment_method_id': payment_term.id if payment_term else False,
                 'property_payment_term_id': int(contact_data.get('property_payment_term_id')),
                 
                 'vat': contact_data.get('vat'),
@@ -189,8 +195,8 @@ class ApiController(http.Controller):
                 vals['state_id'] = int(contact_data.get('state_id'))
             
             # ✅ VALIDACIÓN PARA IDs (EVITA ERRORES)
-            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
-                vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+            #if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
+            #    vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
 
             if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
                 vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
