@@ -107,7 +107,7 @@ class ApiController(http.Controller):
         return is_company_val, final_parent_id, address_type
     #
     #
-     @http.route('/api/create_contact', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
+    @http.route('/api/create_contact', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def create_contact(self, **kwargs):
         if request.httprequest.method == 'OPTIONS':
             return self._create_response({}, 200)
