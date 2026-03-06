@@ -105,15 +105,15 @@ class ApiController(http.Controller):
 
     def _resolve_payment_term(self, sap_code_raw):
         """
-        Dado el valor de l10n_mx_edi_payment_method_id del payload (código SAP),
-        busca el account.payment.term correspondiente y retorna su ID de Odoo.
+        property_payment_term_id llega como código SAP.
+        Busca el account.payment.term por sap_payment_term_code y retorna (sap_code, payment_term).
         """
         if not sap_code_raw:
             return False, False
 
         sap_code = str(sap_code_raw)
         _logger.info("================================================================================")
-        _logger.info("PROCESANDO l10n_mx_edi_payment_method_id")
+        _logger.info("PROCESANDO property_payment_term_id (código SAP → búsqueda en Odoo)")
         _logger.info("  - sap_code recibido (convertido a str): %s", sap_code)
 
         payment_term = request.env['account.payment.term'].sudo().search(
@@ -162,9 +162,9 @@ class ApiController(http.Controller):
                 if loc: 
                     locality_id = loc.id
 
-            # Término de pago: el payload manda l10n_mx_edi_payment_method_id como código SAP
+            # property_payment_term_id → viene como código SAP → buscar en Odoo
             sap_code, payment_term = self._resolve_payment_term(
-                contact_data.get('l10n_mx_edi_payment_method_id')
+                contact_data.get('property_payment_term_id')
             )
 
             # Construcción de valores para Odoo
@@ -182,8 +182,6 @@ class ApiController(http.Controller):
                 'city': contact_data.get('city'),
                 'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
                 'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
-                # l10n_mx_edi_payment_method_id → ID de Odoo del payment.term encontrado
-                'l10n_mx_edi_payment_method_id': payment_term.id if payment_term else False,
                 'vat': contact_data.get('vat'),
                 'ref': contact_data.get('ref'),
                 'l10n_mx_edi_locality_id': locality_id,
@@ -207,6 +205,11 @@ class ApiController(http.Controller):
                 'id_secondary': id_secondary,
                 'lang': contact_data.get('lang', 'es_MX'),
             }
+
+            # l10n_mx_edi_payment_method_id → llega como ID directo de Odoo
+            if contact_data.get('l10n_mx_edi_payment_method_id'):
+                vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+                _logger.info("  - l10n_mx_edi_payment_method_id (ID directo): %s", vals['l10n_mx_edi_payment_method_id'])
 
             # Agregar country_id si viene en el payload
             if 'country_id' in contact_data and contact_data.get('country_id'):
@@ -303,7 +306,7 @@ class ApiController(http.Controller):
                 partner_record = new_contact
                 _logger.info(f">>> Nuevo contacto creado con ID: {contact_id}")
 
-            # Escribir property_payment_term_id y campo auxiliar con with_company
+            # Escribir property_payment_term_id con with_company
             if payment_term:
                 try:
                     company = partner_record.sudo().company_id or request.env['res.company'].sudo().search([], limit=1)
@@ -437,13 +440,15 @@ class ApiController(http.Controller):
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
 
-            # Término de pago: el payload manda l10n_mx_edi_payment_method_id como código SAP
+            # l10n_mx_edi_payment_method_id → llega como ID directo de Odoo
+            if contact_data.get('l10n_mx_edi_payment_method_id'):
+                update_vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+                _logger.info("  - l10n_mx_edi_payment_method_id (ID directo): %s", update_vals['l10n_mx_edi_payment_method_id'])
+
+            # property_payment_term_id → viene como código SAP → buscar en Odoo
             sap_code, payment_term = self._resolve_payment_term(
-                contact_data.get('l10n_mx_edi_payment_method_id')
+                contact_data.get('property_payment_term_id')
             )
-            if payment_term:
-                # l10n_mx_edi_payment_method_id → ID de Odoo del payment.term encontrado
-                update_vals['l10n_mx_edi_payment_method_id'] = payment_term.id
 
             if 'locality_name' in contact_data:
                 loc_name = contact_data.get('locality_name')
@@ -454,7 +459,7 @@ class ApiController(http.Controller):
 
             existing.with_context(l10n_mx_edi_force_validate_vat=False).write(update_vals)
 
-            # Escribir property_payment_term_id y campo auxiliar con with_company
+            # Escribir property_payment_term_id con with_company
             if payment_term:
                 try:
                     company = existing.sudo().company_id or request.env['res.company'].sudo().search([], limit=1)
