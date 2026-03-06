@@ -410,6 +410,25 @@ class ApiController(http.Controller):
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
 
+            # Vendedor por salesPersonCode
+            if 'salesPersonCode' in contact_data:
+                sales_person_code = contact_data.get('salesPersonCode')
+                if sales_person_code:
+                    try:
+                        user = request.env['res.users'].sudo().search([
+                            ('sap_sales_person_code', '=', int(sales_person_code))
+                        ], limit=1)
+
+                        if user and len(user) == 1:
+                            update_vals['user_id'] = user.id
+                            _logger.info("  👤 Vendedor asignado: %s (código SAP: %s)", user.name, sales_person_code)
+                        elif len(user) > 1:
+                            _logger.warning("  ⚠️ Múltiples usuarios con sap_sales_person_code=%s, se omite", sales_person_code)
+                        else:
+                            _logger.warning("  ⚠️ No se encontró usuario con sap_sales_person_code=%s", sales_person_code)
+                    except (ValueError, TypeError) as e:
+                        _logger.warning("  ⚠️ salesPersonCode inválido '%s': %s", sales_person_code, str(e))
+
             # Localidad
             if 'locality_name' in contact_data:
                 loc_name = contact_data.get('locality_name')
@@ -442,12 +461,12 @@ class ApiController(http.Controller):
             else:
                 _logger.info("  - l10n_mx_edi_payment_method_id NO viene en el payload, se omite término de pago")
 
-            # ── Escribir campos normales (SIN property_payment_term_id aquí) ──
+            # Escribir campos normales (SIN property_payment_term_id aquí)
             _logger.info(">>> EJECUTANDO write(update_vals) campos normales")
             existing.with_context(l10n_mx_edi_force_validate_vat=False).write(update_vals)
             _logger.info(">>> write(update_vals) completado")
 
-            # ── Escribir términos de pago con contexto de compañía ──────────
+            # Escribir términos de pago con contexto de compañía
             if payment_term:
                 company_id = existing.company_id.id or request.env.company.id
                 _logger.info("================================================================================")
