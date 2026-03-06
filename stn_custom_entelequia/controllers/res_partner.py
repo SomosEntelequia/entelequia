@@ -105,8 +105,9 @@ class ApiController(http.Controller):
         _logger.info("="*80)
         
         return is_company_val, final_parent_id, address_type
-
-    @http.route('/api/create_contact', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
+    #
+    #
+     @http.route('/api/create_contact', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def create_contact(self, **kwargs):
         if request.httprequest.method == 'OPTIONS':
             return self._create_response({}, 200)
@@ -115,7 +116,7 @@ class ApiController(http.Controller):
             data = json.loads(request.httprequest.data)
             contact_data = data.get('contact_data', {})
             id_secondary = contact_data.get('id_secondary')
-            
+
             _logger.info("\n" + "#"*100)
             _logger.info("### API CREATE_CONTACT LLAMADA ###")
             _logger.info(f"### id_secondary: {id_secondary}")
@@ -123,7 +124,7 @@ class ApiController(http.Controller):
             _logger.info(f"### company_type: {contact_data.get('company_type')}")
             _logger.info(f"### parent_id: {contact_data.get('parent_id')}")
             _logger.info("#"*100 + "\n")
-            
+
             if not id_secondary or not contact_data.get('name'):
                 return self._create_response({'status': 'error', 'message': 'Missing name or id_secondary'}, 400)
 
@@ -135,22 +136,33 @@ class ApiController(http.Controller):
             loc_name = contact_data.get('locality_name')
             if loc_name:
                 loc = request.env['l10n_mx_edi.res.locality'].sudo().search([('name', 'ilike', loc_name)], limit=1)
-                if loc: 
+                if loc:
                     locality_id = loc.id
 
-            #sap_payment_code = contact_data.get('l10n_mx_edi_payment_method_id')
-            #payment_term = request.env['account.payment.term'].sudo().search(
-            #    [('sap_payment_term_code', '=', sap_payment_code)],
-            #    limit=1
-            #)
-        
-            sap_payment_code = contact_data.get('l10n_mx_edi_payment_method_id')
-            
-            payment_term = request.env['account.payment.term'].sudo().search(
-                [('sap_payment_term_code', '=', sap_payment_code)],
-                limit=1
-            )
-            
+            # Término de pago por código SAP
+            payment_term = False
+            sap_payment_code = False
+            if contact_data.get('l10n_mx_edi_payment_method_id'):
+                sap_payment_code = str(contact_data.get('l10n_mx_edi_payment_method_id'))
+                _logger.info("================================================================================")
+                _logger.info("PROCESANDO l10n_mx_edi_payment_method_id (CREATE)")
+                _logger.info("  - sap_payment_code recibido (convertido a str): %s", sap_payment_code)
+
+                payment_term = request.env['account.payment.term'].sudo().search(
+                    [('sap_payment_term_code', '=', sap_payment_code)],
+                    limit=1
+                )
+
+                if payment_term:
+                    _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
+                                 payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
+                else:
+                    _logger.warning("  - NO se encontró account.payment.term con sap_payment_term_code='%s'", sap_payment_code)
+
+                _logger.info("================================================================================")
+            else:
+                _logger.info("  - l10n_mx_edi_payment_method_id NO viene en el payload, se omite término de pago")
+
             # Construcción de valores para Odoo
             vals = {
                 'name': contact_data.get('name'),
@@ -166,10 +178,7 @@ class ApiController(http.Controller):
                 'city': contact_data.get('city'),
                 'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
                 'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
-                #'l10n_mx_edi_payment_method_id': int(contact_data.get('l10n_mx_edi_payment_method_id')),
                 'l10n_mx_edi_payment_method_id': payment_term.id if payment_term else False,
-                'property_payment_term_id': payment_term.id if payment_term else False,
-                
                 'vat': contact_data.get('vat'),
                 'ref': contact_data.get('ref'),
                 'l10n_mx_edi_locality_id': locality_id,
@@ -190,10 +199,10 @@ class ApiController(http.Controller):
                 'u_sap_credit_available': float(contact_data.get('credit_available') or 0.0),
                 'u_sap_use_credit_limit': bool(contact_data.get('use_partner_credit_limit', True)),
                 'u_is_sap_client': True,
-                # Siempre guardamos id_secondary como respaldo (tanto en padres como en hijos)
                 'id_secondary': id_secondary,
                 'lang': contact_data.get('lang', 'es_MX'),
             }
+
             # Agregar country_id si viene en el payload
             if 'country_id' in contact_data and contact_data.get('country_id'):
                 vals['country_id'] = int(contact_data.get('country_id'))
@@ -201,99 +210,114 @@ class ApiController(http.Controller):
             # Agregar state_id si viene en el payload
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 vals['state_id'] = int(contact_data.get('state_id'))
-            
-            # ✅ VALIDACIÓN PARA IDs (EVITA ERRORES)
-            #if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
-            #    vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
-
-            if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
-                vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
 
             # Buscar usuario por salesPersonCode y asignar user_id
             if 'salesPersonCode' in contact_data:
                 sales_person_code = contact_data.get('salesPersonCode')
                 if sales_person_code:
-                    user = request.env['res.users'].sudo().search([
-                        ('sap_sales_person_code', '=', int(sales_person_code))
-                    ], limit=1)
-                    
-                    if user:
-                        vals['user_id'] = user.id
-                        _logger.info(f"   👤 Vendedor asignado: {user.name} (código SAP: {sales_person_code})")
-                    else:
-                        _logger.warning(f"   ⚠️ No se encontró usuario con sap_sales_person_code={sales_person_code}")
+                    try:
+                        user = request.env['res.users'].sudo().search([
+                            ('sap_sales_person_code', '=', int(sales_person_code))
+                        ], limit=1)
+
+                        if user and len(user) == 1:
+                            vals['user_id'] = user.id
+                            _logger.info("  👤 Vendedor asignado: %s (código SAP: %s)", user.name, sales_person_code)
+                        elif len(user) > 1:
+                            _logger.warning("  ⚠️ Múltiples usuarios con sap_sales_person_code=%s, se omite", sales_person_code)
+                        else:
+                            _logger.warning("  ⚠️ No se encontró usuario con sap_sales_person_code=%s", sales_person_code)
+                    except (ValueError, TypeError) as e:
+                        _logger.warning("  ⚠️ salesPersonCode inválido '%s': %s", sales_person_code, str(e))
 
             partner_env = request.env['res.partner'].sudo().with_context(l10n_mx_edi_force_validate_vat=False)
-            
+
             # --- LÓGICA DE BÚSQUEDA SEGÚN JERARQUÍA ---
             existing = False
-            
+
             _logger.info("\n" + "+"*80)
             _logger.info("INICIANDO BÚSQUEDA DE CONTACTO EXISTENTE")
-            
+
             if parent_id:
-                # ===== ES HIJO =====
                 _logger.info(f">>> RAMA: ES HIJO (parent_id={parent_id})")
-                _logger.info(f">>> Buscando hijo con:")
                 _logger.info(f"    - name = '{contact_data.get('name')}'")
                 _logger.info(f"    - parent_id = {parent_id}")
-                _logger.info(f">>> NOTA: El id_secondary '{id_secondary}' se guarda como respaldo pero NO se usa para búsqueda")
-                
+
                 existing = partner_env.search([
                     ('name', '=', contact_data.get('name')),
                     ('parent_id', '=', parent_id)
                 ], limit=1)
-                
+
                 if existing:
-                    _logger.info(f">>> ✓ HIJO ENCONTRADO:")
-                    _logger.info(f"    - ID: {existing.id}")
-                    _logger.info(f"    - Name: '{existing.name}'")
-                    _logger.info(f"    - Parent: {existing.parent_id.name if existing.parent_id else 'None'}")
-                    _logger.info(f"    - Type: {existing.type}")
-                    _logger.info(f"    - id_secondary (respaldo): {existing.id_secondary}")
-                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR HIJO")
+                    _logger.info(f">>> ✓ HIJO ENCONTRADO: ID={existing.id} | ACCIÓN: ACTUALIZAR")
                 else:
-                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO")
-                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO HIJO")
-                    
+                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO | ACCIÓN: CREAR")
+
             else:
-                # ===== ES PADRE =====
                 _logger.info(f">>> RAMA: ES PADRE (parent_id=False)")
-                _logger.info(f">>> Buscando padre con:")
                 _logger.info(f"    - id_secondary = '{id_secondary}'")
-                _logger.info(f"    - parent_id = False")
-                
+
                 existing = partner_env.search([
                     ('id_secondary', '=', id_secondary),
                     ('parent_id', '=', False)
                 ], limit=1)
-                
+
                 if existing:
-                    _logger.info(f">>> ✓ PADRE ENCONTRADO:")
-                    _logger.info(f"    - ID: {existing.id}")
-                    _logger.info(f"    - Name: '{existing.name}'")
-                    _logger.info(f"    - id_secondary: {existing.id_secondary}")
-                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR PADRE")
+                    _logger.info(f">>> ✓ PADRE ENCONTRADO: ID={existing.id} | ACCIÓN: ACTUALIZAR")
                 else:
-                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO")
-                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO PADRE")
-            
+                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO | ACCIÓN: CREAR")
+
             _logger.info("+"*80 + "\n")
-            
+
             # Crear o actualizar
             if existing:
-                _logger.info(f">>> EJECUTANDO: existing.write(vals)")
-                _logger.info(f">>> Contacto ID a actualizar: {existing.id}")
+                _logger.info(f">>> EJECUTANDO: existing.write(vals) | ID: {existing.id}")
                 existing.write(vals)
                 action = "updated"
                 contact_id = existing.id
+                partner_record = existing
             else:
                 _logger.info(f">>> EJECUTANDO: partner_env.create(vals)")
                 new_contact = partner_env.create(vals)
                 action = "created"
                 contact_id = new_contact.id
+                partner_record = new_contact
                 _logger.info(f">>> Nuevo contacto creado con ID: {contact_id}")
-            
+
+            # Escribir términos de pago con with_company
+            if payment_term:
+                company = partner_record.company_id or request.env['res.company'].sudo().search([], limit=1)
+                _logger.info("================================================================================")
+                _logger.info("ESCRIBIENDO TÉRMINOS DE PAGO CON with_company (CREATE)")
+                _logger.info("  - partner_record.id: %s", partner_record.id)
+                _logger.info("  - company: id=%s | name=%s", company.id, company.name)
+                _logger.info("  - sap_payment_code: %s | payment_term.id: %s", sap_payment_code, payment_term.id)
+
+                # 1. Guardar código SAP en campo auxiliar (Char)
+                partner_record.with_company(company).write({
+                    'x_studio_terminos_pago_sap_auxiliar': sap_payment_code,
+                })
+                _logger.info("  - PASO 1 OK: x_studio_terminos_pago_sap_auxiliar = '%s'", sap_payment_code)
+
+                # 2. Escribir property_payment_term_id con with_company
+                partner_record.with_company(company).write({
+                    'property_payment_term_id': payment_term.id,
+                })
+
+                # Verificar
+                partner_record.invalidate_recordset()
+                valor_property = partner_record.with_company(company).property_payment_term_id
+                _logger.info("  - VERIFICACION property_payment_term_id: id=%s | name=%s",
+                             valor_property.id if valor_property else 'VACIO',
+                             valor_property.name if valor_property else 'VACIO')
+
+                if valor_property and valor_property.id == payment_term.id:
+                    _logger.info("  - ✅ ÉXITO: property_payment_term_id escrito correctamente")
+                else:
+                    _logger.warning("  - ⚠️ FALLO: property_payment_term_id NO quedó con el valor esperado")
+
+                _logger.info("================================================================================")
+
             _logger.info("\n" + "#"*100)
             _logger.info("### RESULTADO FINAL ###")
             _logger.info(f"### Acción: {action}")
@@ -304,9 +328,9 @@ class ApiController(http.Controller):
             _logger.info("#"*100 + "\n")
 
             return self._create_response({
-                'status': 'success', 
-                'contact_id': contact_id, 
-                'action': action, 
+                'status': 'success',
+                'contact_id': contact_id,
+                'action': action,
                 'type_applied': addr_type,
                 'is_company': is_company,
                 'parent_id': parent_id,
