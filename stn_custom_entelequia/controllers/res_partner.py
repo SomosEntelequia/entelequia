@@ -468,18 +468,19 @@ class ApiController(http.Controller):
             existing.with_context(l10n_mx_edi_force_validate_vat=False).write(update_vals)
 
             # Escribir property_payment_term_id por separado con contexto de compañía
+            # Escribir x_studio_terminos_pago_sap_auxiliar con contexto de compañía
             if payment_term:
                 company_id = existing.company_id.id or request.env.company.id
                 _logger.info("================================================================================")
-                _logger.info("ESCRIBIENDO property_payment_term_id con contexto de compañía (UPDATE)")
+                _logger.info("ESCRIBIENDO x_studio_terminos_pago_sap_auxiliar con contexto de compañía (UPDATE)")
                 _logger.info("  - company_id: %s", company_id)
-                _logger.info("  - property_payment_term_id: %s", payment_term.id)
+                _logger.info("  - payment_term.id: %s | name: %s", payment_term.id, payment_term.name)
                 existing.with_context(
                     force_company=company_id,
                     company_id=company_id,
                     l10n_mx_edi_force_validate_vat=False
-                ).write({'property_payment_term_id': payment_term.id})
-                _logger.info("  - property_payment_term_id escrito correctamente")
+                ).write({'x_studio_terminos_pago_sap_auxiliar': payment_term.id})
+                _logger.info("  - x_studio_terminos_pago_sap_auxiliar escrito correctamente: %s", payment_term.id)
                 _logger.info("================================================================================")
 
             return self._create_response({
