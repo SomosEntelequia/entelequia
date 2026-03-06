@@ -467,62 +467,39 @@ class ApiController(http.Controller):
             _logger.info(">>> write(update_vals) completado")
 
             # Escribir términos de pago con contexto de compañía
+            # Escribir términos de pago con with_company (Odoo 17+)
             if payment_term:
-                company_id = existing.company_id.id or request.env.company.id
+                # Obtener compañía válida — desde el contacto, o la primera disponible
+                company = existing.company_id or request.env['res.company'].sudo().search([], limit=1)
                 _logger.info("================================================================================")
-                _logger.info("ESCRIBIENDO TÉRMINOS DE PAGO CON CONTEXTO DE COMPAÑÍA (UPDATE)")
+                _logger.info("ESCRIBIENDO TÉRMINOS DE PAGO CON with_company (UPDATE)")
                 _logger.info("  - existing.id: %s", existing.id)
-                _logger.info("  - company_id resuelto: %s", company_id)
-                _logger.info("  - sap_code a guardar en auxiliar: %s", sap_code)
-                _logger.info("  - payment_term.id a guardar en property: %s", payment_term.id)
-
+                _logger.info("  - company: id=%s | name=%s", company.id, company.name)
+                _logger.info("  - sap_code: %s | payment_term.id: %s", sap_code, payment_term.id)
+            
                 # 1. Guardar código SAP en campo auxiliar (Char)
-                existing.with_context(
-                    force_company=company_id,
-                    company_id=company_id,
-                    l10n_mx_edi_force_validate_vat=False
-                ).write({
+                existing.with_company(company).write({
                     'x_studio_terminos_pago_sap_auxiliar': sap_code,
                 })
                 _logger.info("  - PASO 1 OK: x_studio_terminos_pago_sap_auxiliar = '%s'", sap_code)
-
-                # Verificar que quedó escrito
+            
+                # 2. Escribir property_payment_term_id con with_company
+                existing.with_company(company).write({
+                    'property_payment_term_id': payment_term.id,
+                })
+            
+                # Verificar
                 existing.invalidate_recordset()
-                valor_auxiliar = existing.x_studio_terminos_pago_sap_auxiliar
-                _logger.info("  - VERIFICACION auxiliar en BD: '%s'", valor_auxiliar)
-
-                # 2. Buscar payment.term por código SAP y escribir en property_payment_term_id
-                payment_term_final = request.env['account.payment.term'].sudo().search(
-                    [('sap_payment_term_code', '=', valor_auxiliar)],
-                    limit=1
-                )
-                _logger.info("  - Buscando payment.term con sap_payment_term_code='%s' → encontrado: %s",
-                             valor_auxiliar, payment_term_final.id if payment_term_final else 'NINGUNO')
-
-                if payment_term_final:
-                    _logger.info("  - PASO 2: Intentando escribir property_payment_term_id = %s", payment_term_final.id)
-                    existing.with_context(
-                        force_company=company_id,
-                        company_id=company_id,
-                        l10n_mx_edi_force_validate_vat=False
-                    ).write({
-                        'property_payment_term_id': payment_term_final.id,
-                    })
-
-                    # Verificar que quedó escrito
-                    existing.invalidate_recordset()
-                    valor_property = existing.property_payment_term_id
-                    _logger.info("  - VERIFICACION property_payment_term_id en BD: id=%s | name=%s",
-                                 valor_property.id if valor_property else 'VACIO',
-                                 valor_property.name if valor_property else 'VACIO')
-
-                    if valor_property and valor_property.id == payment_term_final.id:
-                        _logger.info("  - ✅ ÉXITO: property_payment_term_id escrito correctamente")
-                    else:
-                        _logger.warning("  - ⚠️ FALLO: property_payment_term_id NO quedó con el valor esperado")
+                valor_property = existing.with_company(company).property_payment_term_id
+                _logger.info("  - VERIFICACION property_payment_term_id: id=%s | name=%s",
+                             valor_property.id if valor_property else 'VACIO',
+                             valor_property.name if valor_property else 'VACIO')
+            
+                if valor_property and valor_property.id == payment_term.id:
+                    _logger.info("  - ✅ ÉXITO: property_payment_term_id escrito correctamente")
                 else:
-                    _logger.warning("  - NO se encontró payment.term con sap_payment_term_code='%s'", valor_auxiliar)
-
+                    _logger.warning("  - ⚠️ FALLO: property_payment_term_id NO quedó con el valor esperado")
+            
                 _logger.info("================================================================================")
 
             return self._create_response({
