@@ -432,30 +432,42 @@ class ApiController(http.Controller):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
 
             # Término de pago por código SAP
-            payment_term = False
-            if contact_data.get('l10n_mx_edi_payment_method_id'):
-                sap_code = str(contact_data.get('l10n_mx_edi_payment_method_id'))
-                _logger.info("================================================================================")
-                _logger.info("PROCESANDO l10n_mx_edi_payment_method_id (UPDATE)")
-                _logger.info("  - sap_code recibido (convertido a str): %s", sap_code)
-
-                payment_term = request.env['account.payment.term'].sudo().search(
-                    [('sap_payment_term_code', '=', sap_code)],
-                    limit=1
-                )
-
-                if payment_term:
-                    _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
-                                 payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
-                    update_vals['l10n_mx_edi_payment_method_id'] = payment_term.id
-                    _logger.info("  - update_vals['l10n_mx_edi_payment_method_id'] = %s", payment_term.id)
-                else:
-                    _logger.warning("  - NO se encontró ningún account.payment.term con sap_payment_term_code='%s'", sap_code)
-
-                _logger.info("================================================================================")
+           if payment_term:
+            company_id = existing.company_id.id or request.env.company.id
+            _logger.info("================================================================================")
+            _logger.info("ESCRIBIENDO términos de pago con contexto de compañía (UPDATE)")
+            _logger.info("  - company_id: %s", company_id)
+            _logger.info("  - payment_term.id: %s | name: %s", payment_term.id, payment_term.name)
+            _logger.info("  - sap_code (se guarda en auxiliar): %s", sap_code)
+        
+            # 1. Guardar el código SAP en el campo auxiliar
+            existing.with_context(
+                force_company=company_id,
+                company_id=company_id,
+                l10n_mx_edi_force_validate_vat=False
+            ).write({
+                'x_studio_terminos_pago_sap_auxiliar': sap_code,
+            })
+            _logger.info("  - x_studio_terminos_pago_sap_auxiliar = '%s' escrito", sap_code)
+        
+            # 2. Buscar por código SAP y escribir en property_payment_term_id
+            payment_term_final = request.env['account.payment.term'].sudo().search(
+                [('sap_payment_term_code', '=', existing.x_studio_terminos_pago_sap_auxiliar)],
+                limit=1
+            )
+            if payment_term_final:
+                existing.with_context(
+                    force_company=company_id,
+                    company_id=company_id,
+                    l10n_mx_edi_force_validate_vat=False
+                ).write({
+                    'property_payment_term_id': payment_term_final.id,
+                })
+                _logger.info("  - property_payment_term_id = %s escrito correctamente", payment_term_final.id)
             else:
-                _logger.info("  - l10n_mx_edi_payment_method_id NO viene en el payload, se omite término de pago")
-
+                _logger.warning("  - NO se encontró payment.term con sap_payment_term_code='%s'", existing.x_studio_terminos_pago_sap_auxiliar)
+        
+            _logger.info("================================================================================")
             # Localidad
             if 'locality_name' in contact_data:
                 loc_name = contact_data.get('locality_name')
