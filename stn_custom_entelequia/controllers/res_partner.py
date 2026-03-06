@@ -140,6 +140,7 @@ class ApiController(http.Controller):
 
             # Término de pago por código SAP
             payment_term = False
+            sap_payment_code = False
             if contact_data.get('l10n_mx_edi_payment_method_id'):
                 sap_payment_code = str(contact_data.get('l10n_mx_edi_payment_method_id'))
                 _logger.info("================================================================================")
@@ -154,7 +155,6 @@ class ApiController(http.Controller):
                 if payment_term:
                     _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
                                  payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
-                    _logger.info("  - Se asignará property_payment_term_id = %s", payment_term.id)
                 else:
                     _logger.warning("  - NO se encontró ningún account.payment.term con sap_payment_term_code='%s'", sap_payment_code)
 
@@ -235,10 +235,8 @@ class ApiController(http.Controller):
             if parent_id:
                 # ===== ES HIJO =====
                 _logger.info(f">>> RAMA: ES HIJO (parent_id={parent_id})")
-                _logger.info(f">>> Buscando hijo con:")
                 _logger.info(f"    - name = '{contact_data.get('name')}'")
                 _logger.info(f"    - parent_id = {parent_id}")
-                _logger.info(f">>> NOTA: El id_secondary '{id_secondary}' se guarda como respaldo pero NO se usa para búsqueda")
 
                 existing = partner_env.search([
                     ('name', '=', contact_data.get('name')),
@@ -246,23 +244,14 @@ class ApiController(http.Controller):
                 ], limit=1)
 
                 if existing:
-                    _logger.info(f">>> ✓ HIJO ENCONTRADO:")
-                    _logger.info(f"    - ID: {existing.id}")
-                    _logger.info(f"    - Name: '{existing.name}'")
-                    _logger.info(f"    - Parent: {existing.parent_id.name if existing.parent_id else 'None'}")
-                    _logger.info(f"    - Type: {existing.type}")
-                    _logger.info(f"    - id_secondary (respaldo): {existing.id_secondary}")
-                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR HIJO")
+                    _logger.info(f">>> ✓ HIJO ENCONTRADO: ID={existing.id} | ACCIÓN: ACTUALIZAR")
                 else:
-                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO")
-                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO HIJO")
+                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO | ACCIÓN: CREAR")
 
             else:
                 # ===== ES PADRE =====
                 _logger.info(f">>> RAMA: ES PADRE (parent_id=False)")
-                _logger.info(f">>> Buscando padre con:")
                 _logger.info(f"    - id_secondary = '{id_secondary}'")
-                _logger.info(f"    - parent_id = False")
 
                 existing = partner_env.search([
                     ('id_secondary', '=', id_secondary),
@@ -270,46 +259,61 @@ class ApiController(http.Controller):
                 ], limit=1)
 
                 if existing:
-                    _logger.info(f">>> ✓ PADRE ENCONTRADO:")
-                    _logger.info(f"    - ID: {existing.id}")
-                    _logger.info(f"    - Name: '{existing.name}'")
-                    _logger.info(f"    - id_secondary: {existing.id_secondary}")
-                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR PADRE")
+                    _logger.info(f">>> ✓ PADRE ENCONTRADO: ID={existing.id} | ACCIÓN: ACTUALIZAR")
                 else:
-                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO")
-                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO PADRE")
+                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO | ACCIÓN: CREAR")
 
             _logger.info("+"*80 + "\n")
 
             # Crear o actualizar
             if existing:
-                _logger.info(f">>> EJECUTANDO: existing.write(vals)")
-                _logger.info(f">>> Contacto ID a actualizar: {existing.id}")
                 existing.write(vals)
                 action = "updated"
                 contact_id = existing.id
                 partner_record = existing
+                _logger.info(f">>> Contacto actualizado ID: {contact_id}")
             else:
-                _logger.info(f">>> EJECUTANDO: partner_env.create(vals)")
                 new_contact = partner_env.create(vals)
                 action = "created"
                 contact_id = new_contact.id
                 partner_record = new_contact
-                _logger.info(f">>> Nuevo contacto creado con ID: {contact_id}")
+                _logger.info(f">>> Nuevo contacto creado ID: {contact_id}")
 
-            # Escribir property_payment_term_id por separado con contexto de compañía
+            # Escribir términos de pago con contexto de compañía
             if payment_term:
                 company_id = partner_record.company_id.id or request.env.company.id
                 _logger.info("================================================================================")
-                _logger.info("ESCRIBIENDO property_payment_term_id con contexto de compañía (CREATE)")
+                _logger.info("ESCRIBIENDO términos de pago con contexto de compañía (CREATE)")
                 _logger.info("  - company_id: %s", company_id)
-                _logger.info("  - property_payment_term_id: %s", payment_term.id)
+                _logger.info("  - sap_code: %s | payment_term.id: %s | name: %s", sap_payment_code, payment_term.id, payment_term.name)
+
+                # 1. Guardar código SAP en campo auxiliar
                 partner_record.with_context(
                     force_company=company_id,
                     company_id=company_id,
                     l10n_mx_edi_force_validate_vat=False
-                ).write({'property_payment_term_id': payment_term.id})
-                _logger.info("  - property_payment_term_id escrito correctamente")
+                ).write({
+                    'x_studio_terminos_pago_sap_auxiliar': sap_payment_code,
+                })
+                _logger.info("  - x_studio_terminos_pago_sap_auxiliar = '%s' escrito", sap_payment_code)
+
+                # 2. Buscar por código SAP y escribir en property_payment_term_id
+                payment_term_final = request.env['account.payment.term'].sudo().search(
+                    [('sap_payment_term_code', '=', partner_record.x_studio_terminos_pago_sap_auxiliar)],
+                    limit=1
+                )
+                if payment_term_final:
+                    partner_record.with_context(
+                        force_company=company_id,
+                        company_id=company_id,
+                        l10n_mx_edi_force_validate_vat=False
+                    ).write({
+                        'property_payment_term_id': payment_term_final.id,
+                    })
+                    _logger.info("  - property_payment_term_id = %s escrito correctamente", payment_term_final.id)
+                else:
+                    _logger.warning("  - NO se encontró payment.term con sap_payment_term_code='%s'", partner_record.x_studio_terminos_pago_sap_auxiliar)
+
                 _logger.info("================================================================================")
 
             _logger.info("\n" + "#"*100)
@@ -432,42 +436,29 @@ class ApiController(http.Controller):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
 
             # Término de pago por código SAP
-           if payment_term:
-            company_id = existing.company_id.id or request.env.company.id
-            _logger.info("================================================================================")
-            _logger.info("ESCRIBIENDO términos de pago con contexto de compañía (UPDATE)")
-            _logger.info("  - company_id: %s", company_id)
-            _logger.info("  - payment_term.id: %s | name: %s", payment_term.id, payment_term.name)
-            _logger.info("  - sap_code (se guarda en auxiliar): %s", sap_code)
-        
-            # 1. Guardar el código SAP en el campo auxiliar
-            existing.with_context(
-                force_company=company_id,
-                company_id=company_id,
-                l10n_mx_edi_force_validate_vat=False
-            ).write({
-                'x_studio_terminos_pago_sap_auxiliar': sap_code,
-            })
-            _logger.info("  - x_studio_terminos_pago_sap_auxiliar = '%s' escrito", sap_code)
-        
-            # 2. Buscar por código SAP y escribir en property_payment_term_id
-            payment_term_final = request.env['account.payment.term'].sudo().search(
-                [('sap_payment_term_code', '=', existing.x_studio_terminos_pago_sap_auxiliar)],
-                limit=1
-            )
-            if payment_term_final:
-                existing.with_context(
-                    force_company=company_id,
-                    company_id=company_id,
-                    l10n_mx_edi_force_validate_vat=False
-                ).write({
-                    'property_payment_term_id': payment_term_final.id,
-                })
-                _logger.info("  - property_payment_term_id = %s escrito correctamente", payment_term_final.id)
+            payment_term = False
+            sap_code = False
+            if contact_data.get('l10n_mx_edi_payment_method_id'):
+                sap_code = str(contact_data.get('l10n_mx_edi_payment_method_id'))
+                _logger.info("================================================================================")
+                _logger.info("PROCESANDO l10n_mx_edi_payment_method_id (UPDATE)")
+                _logger.info("  - sap_code recibido (convertido a str): %s", sap_code)
+
+                payment_term = request.env['account.payment.term'].sudo().search(
+                    [('sap_payment_term_code', '=', sap_code)],
+                    limit=1
+                )
+
+                if payment_term:
+                    _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
+                                 payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
+                else:
+                    _logger.warning("  - NO se encontró ningún account.payment.term con sap_payment_term_code='%s'", sap_code)
+
+                _logger.info("================================================================================")
             else:
-                _logger.warning("  - NO se encontró payment.term con sap_payment_term_code='%s'", existing.x_studio_terminos_pago_sap_auxiliar)
-        
-            _logger.info("================================================================================")
+                _logger.info("  - l10n_mx_edi_payment_method_id NO viene en el payload, se omite término de pago")
+
             # Localidad
             if 'locality_name' in contact_data:
                 loc_name = contact_data.get('locality_name')
@@ -479,24 +470,41 @@ class ApiController(http.Controller):
             # Escribir campos normales
             existing.with_context(l10n_mx_edi_force_validate_vat=False).write(update_vals)
 
-            # Escribir property_payment_term_id por separado con contexto de compañía
-            # Escribir x_studio_terminos_pago_sap_auxiliar con contexto de compañía
+            # Escribir términos de pago con contexto de compañía
             if payment_term:
                 company_id = existing.company_id.id or request.env.company.id
                 _logger.info("================================================================================")
                 _logger.info("ESCRIBIENDO términos de pago con contexto de compañía (UPDATE)")
                 _logger.info("  - company_id: %s", company_id)
-                _logger.info("  - payment_term.id: %s | name: %s", payment_term.id, payment_term.name)
+                _logger.info("  - sap_code: %s | payment_term.id: %s | name: %s", sap_code, payment_term.id, payment_term.name)
+
+                # 1. Guardar código SAP en campo auxiliar
                 existing.with_context(
                     force_company=company_id,
                     company_id=company_id,
                     l10n_mx_edi_force_validate_vat=False
                 ).write({
-                    'x_studio_terminos_pago_sap_auxiliar': str(payment_term.id),  # campo Char → guarda el ID como texto
-                    'property_payment_term_id': payment_term.id,                  # campo Many2one → guarda el ID directo
+                    'x_studio_terminos_pago_sap_auxiliar': sap_code,
                 })
-                _logger.info("  - x_studio_terminos_pago_sap_auxiliar = '%s'", str(payment_term.id))
-                _logger.info("  - property_payment_term_id = %s", payment_term.id)
+                _logger.info("  - x_studio_terminos_pago_sap_auxiliar = '%s' escrito", sap_code)
+
+                # 2. Buscar por código SAP y escribir en property_payment_term_id
+                payment_term_final = request.env['account.payment.term'].sudo().search(
+                    [('sap_payment_term_code', '=', existing.x_studio_terminos_pago_sap_auxiliar)],
+                    limit=1
+                )
+                if payment_term_final:
+                    existing.with_context(
+                        force_company=company_id,
+                        company_id=company_id,
+                        l10n_mx_edi_force_validate_vat=False
+                    ).write({
+                        'property_payment_term_id': payment_term_final.id,
+                    })
+                    _logger.info("  - property_payment_term_id = %s escrito correctamente", payment_term_final.id)
+                else:
+                    _logger.warning("  - NO se encontró payment.term con sap_payment_term_code='%s'", existing.x_studio_terminos_pago_sap_auxiliar)
+
                 _logger.info("================================================================================")
 
             return self._create_response({
