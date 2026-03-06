@@ -242,6 +242,7 @@ class ApiController(http.Controller):
                 _logger.info(f">>> RAMA: ES HIJO (parent_id={parent_id})")
                 _logger.info(f"    - name = '{contact_data.get('name')}'")
                 _logger.info(f"    - parent_id = {parent_id}")
+                _logger.info(f">>> NOTA: El id_secondary '{id_secondary}' se guarda como respaldo pero NO se usa para búsqueda")
 
                 existing = partner_env.search([
                     ('name', '=', contact_data.get('name')),
@@ -249,13 +250,21 @@ class ApiController(http.Controller):
                 ], limit=1)
 
                 if existing:
-                    _logger.info(f">>> ✓ HIJO ENCONTRADO: ID={existing.id} | ACCIÓN: ACTUALIZAR")
+                    _logger.info(f">>> ✓ HIJO ENCONTRADO:")
+                    _logger.info(f"    - ID: {existing.id}")
+                    _logger.info(f"    - Name: '{existing.name}'")
+                    _logger.info(f"    - Parent: {existing.parent_id.name if existing.parent_id else 'None'}")
+                    _logger.info(f"    - Type: {existing.type}")
+                    _logger.info(f"    - id_secondary (respaldo): {existing.id_secondary}")
+                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR HIJO")
                 else:
-                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO | ACCIÓN: CREAR")
+                    _logger.info(f">>> ✗ HIJO NO ENCONTRADO")
+                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO HIJO")
 
             else:
                 _logger.info(f">>> RAMA: ES PADRE (parent_id=False)")
                 _logger.info(f"    - id_secondary = '{id_secondary}'")
+                _logger.info(f"    - parent_id = False")
 
                 existing = partner_env.search([
                     ('id_secondary', '=', id_secondary),
@@ -263,15 +272,21 @@ class ApiController(http.Controller):
                 ], limit=1)
 
                 if existing:
-                    _logger.info(f">>> ✓ PADRE ENCONTRADO: ID={existing.id} | ACCIÓN: ACTUALIZAR")
+                    _logger.info(f">>> ✓ PADRE ENCONTRADO:")
+                    _logger.info(f"    - ID: {existing.id}")
+                    _logger.info(f"    - Name: '{existing.name}'")
+                    _logger.info(f"    - id_secondary: {existing.id_secondary}")
+                    _logger.info(f"    >>> ACCIÓN: ACTUALIZAR PADRE")
                 else:
-                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO | ACCIÓN: CREAR")
+                    _logger.info(f">>> ✗ PADRE NO ENCONTRADO")
+                    _logger.info(f"    >>> ACCIÓN: CREAR NUEVO PADRE")
 
             _logger.info("+"*80 + "\n")
 
             # Crear o actualizar
             if existing:
-                _logger.info(f">>> EJECUTANDO: existing.write(vals) | ID: {existing.id}")
+                _logger.info(f">>> EJECUTANDO: existing.write(vals)")
+                _logger.info(f">>> Contacto ID a actualizar: {existing.id}")
                 existing.write(vals)
                 action = "updated"
                 contact_id = existing.id
@@ -286,7 +301,7 @@ class ApiController(http.Controller):
 
             # Escribir términos de pago con with_company
             if payment_term:
-                company = partner_record.company_id or request.env['res.company'].sudo().search([], limit=1)
+                company = partner_record.sudo().company_id or request.env['res.company'].sudo().search([], limit=1)
                 _logger.info("================================================================================")
                 _logger.info("ESCRIBIENDO TÉRMINOS DE PAGO CON with_company (CREATE)")
                 _logger.info("  - partner_record.id: %s", partner_record.id)
@@ -294,19 +309,19 @@ class ApiController(http.Controller):
                 _logger.info("  - sap_payment_code: %s | payment_term.id: %s", sap_payment_code, payment_term.id)
 
                 # 1. Guardar código SAP en campo auxiliar (Char)
-                partner_record.with_company(company).write({
+                partner_record.sudo().with_company(company).write({
                     'x_studio_terminos_pago_sap_auxiliar': sap_payment_code,
                 })
                 _logger.info("  - PASO 1 OK: x_studio_terminos_pago_sap_auxiliar = '%s'", sap_payment_code)
 
                 # 2. Escribir property_payment_term_id con with_company
-                partner_record.with_company(company).write({
+                partner_record.sudo().with_company(company).write({
                     'property_payment_term_id': payment_term.id,
                 })
 
                 # Verificar
                 partner_record.invalidate_recordset()
-                valor_property = partner_record.with_company(company).property_payment_term_id
+                valor_property = partner_record.sudo().with_company(company).property_payment_term_id
                 _logger.info("  - VERIFICACION property_payment_term_id: id=%s | name=%s",
                              valor_property.id if valor_property else 'VACIO',
                              valor_property.name if valor_property else 'VACIO')
