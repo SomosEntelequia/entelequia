@@ -42,12 +42,17 @@ class SapPriceList(models.Model):
         Estrategia:
         1) Exacto: busca línea con (product + uom) exactos.
         2) Fallback: busca línea con UdM base del producto y convierte
-           mediante _compute_price.
+           mediante _compute_price. Solo aplica si la UdM base existe
+           y es distinta a la UdM solicitada.
 
         Nota Odoo 19: uom.uom ya no expone el campo category_id,
         por lo que se eliminó cualquier validación sobre ese campo.
         La compatibilidad entre unidades es responsabilidad de
         _compute_price; si son inconvertibles, Odoo lanzará su propio error.
+
+        Si el producto no tiene UdM base definida (base_uom vacío),
+        se permite continuar: la búsqueda exacta del paso 1 ya cubrió
+        el caso y si no encontró nada, se retorna None sin bloquear.
 
         Args:
             product (product.product): Producto a buscar.
@@ -70,6 +75,16 @@ class SapPriceList(models.Model):
 
         Line = self.env["sap.price.list.line"].sudo()
 
+        # ── Diagnóstico: líneas existentes para el producto en esta lista ────
+        existing_lines = Line.search([
+            ("price_list_id", "=", self.id),
+            ("product_id", "=", product.id),
+        ])
+        _logger.debug(
+            "_get_price | Líneas existentes para el producto en la lista | %s",
+            [(l.uom_id.id, l.uom_id.name, l.price_unit) for l in existing_lines],
+        )
+
         # ── 1) Búsqueda exacta producto + UdM solicitada ──────────────────────
         line = Line.search(
             [
@@ -88,21 +103,39 @@ class SapPriceList(models.Model):
             return line.price_unit
 
         _logger.debug(
-            "_get_price | Sin línea exacta, intentando fallback con UdM base del producto."
+            "_get_price | Sin línea exacta, evaluando fallback con UdM base del producto."
         )
 
         # ── 2) Fallback: precio en UdM base + conversión ──────────────────────
         base_uom = product.uom_id
-        if not base_uom or base_uom.id == uom.id:
+
+        # Si el producto no tiene UdM base, no hay conversión posible.
+        # La búsqueda exacta del paso 1 ya cubrió este caso.
+        if not base_uom:
             _logger.warning(
-                "_get_price | Sin fallback posible | product=%s | "
-                "uom_base=%s | uom_solicitada=%s",
+                "_get_price | Producto sin UdM base definida, no hay fallback | "
+                "price_list=%s | product=%s | uom=%s",
+                self.name,
                 product.display_name,
-                base_uom.name if base_uom else "N/A",
                 uom.name,
             )
             return None
 
+        # Si base_uom == uom solicitada, el paso 1 ya lo intentó sin éxito.
+        # No hay conversión que aplicar.
+        if base_uom.id == uom.id:
+            _logger.warning(
+                "_get_price | Sin precio exacto y UdM solicitada == UdM base, "
+                "no hay conversión aplicable | "
+                "price_list=%s | product=%s | uom=%s (id=%s)",
+                self.name,
+                product.display_name,
+                uom.name,
+                uom.id,
+            )
+            return None
+
+        # UdM base distinta a la solicitada: buscar línea en UdM base y convertir
         base_line = Line.search(
             [
                 ("price_list_id", "=", self.id),
@@ -115,10 +148,11 @@ class SapPriceList(models.Model):
         if not base_line:
             _logger.warning(
                 "_get_price | Sin línea en UdM base | price_list=%s | "
-                "product=%s | uom_base=%s",
+                "product=%s | uom_base=%s (id=%s)",
                 self.name,
                 product.display_name,
                 base_uom.name,
+                base_uom.id,
             )
             return None
 
@@ -214,13 +248,25 @@ class SapPriceListLine(models.Model):
         únicamente un aviso informativo en el log cuando las unidades
         difieren; la validación de convertibilidad real ocurre en tiempo
         de cálculo a través de _compute_price.
+
+        Si el producto no tiene UdM base definida (base_uom vacío),
+        se permite guardar la línea sin restricción.
         """
         for rec in self:
             if not rec.product_id or not rec.uom_id:
                 continue
 
             puom = rec.product_id.uom_id
+
+            # Sin UdM base en el producto: se permite sin restricción
             if not puom:
+                _logger.info(
+                    "_check_uom_compatibility | Producto sin UdM base definida, "
+                    "se omite validación | product=%s | uom_linea=%s (id=%s)",
+                    rec.product_id.display_name,
+                    rec.uom_id.name,
+                    rec.uom_id.id,
+                )
                 continue
 
             if puom.id != rec.uom_id.id:
