@@ -9,7 +9,6 @@ _name = “sap.price.list”
 _description = “Lista de Precio SAP”
 _rec_name = “name”
 
-```
 name = fields.Char(string="Nombre de la lista de precios", required=True)
 active = fields.Boolean(default=True)
 
@@ -145,14 +144,12 @@ def _get_price(self, product, uom):
             exc_info=True,
         )
         return None
-```
 
 class SapPriceListLine(models.Model):
 _name = “sap.price.list.line”
 _description = “Línea de Lista de Precio SAP”
 _order = “product_id, uom_id”
 
-```
 id_secundario_sap_line = fields.Char(
     string="ID Secundario SAP Línea",
     required=True,
