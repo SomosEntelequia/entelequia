@@ -114,7 +114,7 @@ class SapPriceList(models.Model):
             self.id,
             product.display_name,
             product.id,
-            product._name,   # confirma que ya es product.product
+            product._name,  # confirma que ya es product.product
             uom.name,
             uom.id,
         )
@@ -155,7 +155,7 @@ class SapPriceList(models.Model):
         # ── 3) Fallback: precio en UdM base + conversión ──────────────────────
         base_uom = product.uom_id
 
-        # Sin UdM base: no hay conversión posible, paso 1 ya cubrió este caso
+        # Sin UdM base: no hay conversión posible, paso 2 ya cubrió este caso
         if not base_uom:
             _logger.warning(
                 "_get_price | Producto sin UdM base definida, no hay fallback | "
@@ -288,13 +288,16 @@ class SapPriceListLine(models.Model):
         """Valida compatibilidad entre la UdM de la línea y la del producto.
 
         En Odoo 19, uom.uom ya no expone category_id, por lo que no es
-        posible verificar la categoría desde Python. Esta constraint emite
-        únicamente un aviso informativo en el log cuando las unidades
-        difieren; la validación de convertibilidad real ocurre en tiempo
-        de cálculo a través de _compute_price.
+        posible verificar la categoría desde Python.
 
-        Si el producto no tiene UdM base definida (base_uom vacío),
-        se permite guardar la línea sin restricción.
+        Niveles de log usados:
+        - DEBUG: UdM de línea distinta a UdM base (comportamiento normal,
+          es válido tener múltiples UdM por producto en la lista SAP).
+        - DEBUG: Producto sin UdM base definida (se permite sin restricción).
+
+        No se usa INFO ni WARNING aquí para evitar spam en producción.
+        La validación de convertibilidad real ocurre en tiempo de cálculo
+        a través de _compute_price.
         """
         for rec in self:
             if not rec.product_id or not rec.uom_id:
@@ -304,7 +307,7 @@ class SapPriceListLine(models.Model):
 
             # Sin UdM base en el producto: se permite sin restricción
             if not puom:
-                _logger.info(
+                _logger.debug(
                     "_check_uom_compatibility | Producto sin UdM base definida, "
                     "se omite validación | product=%s | uom_linea=%s (id=%s)",
                     rec.product_id.display_name,
@@ -313,11 +316,13 @@ class SapPriceListLine(models.Model):
                 )
                 continue
 
+            # UdM distinta a la base: normal en listas SAP con múltiples UdM.
+            # Solo se registra en DEBUG para no contaminar logs de producción.
             if puom.id != rec.uom_id.id:
-                _logger.info(
+                _logger.debug(
                     "_check_uom_compatibility | UdM de línea distinta a UdM base "
                     "del producto | product=%s | uom_producto=%s (id=%s) | "
-                    "uom_linea=%s (id=%s) | Verifique que sean convertibles entre sí.",
+                    "uom_linea=%s (id=%s)",
                     rec.product_id.display_name,
                     puom.name,
                     puom.id,
