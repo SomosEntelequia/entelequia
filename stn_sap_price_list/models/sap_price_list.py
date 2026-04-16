@@ -100,6 +100,80 @@ class SapPriceList(models.Model):
         )
         return True
 
+    def _log_diagnostico_lista(self, product, uom_pedida, base_uom):
+        """
+        Vuelca en WARNING todo lo que hay en la lista para este producto,
+        y también un resumen de la lista completa (primeras 50 líneas).
+        Se llama únicamente cuando _get_price va a retornar None,
+        para facilitar el diagnóstico sin tener que entrar a la BD.
+        """
+        Line = self.env["sap.price.list.line"].sudo()
+
+        # ── A) ¿Qué líneas tiene este producto en la lista? ────────────
+        lineas_producto = Line.search([
+            ("price_list_id", "=", self.id),
+            ("product_id", "=", product.id),
+        ])
+
+        if lineas_producto:
+            detalle = [
+                "  • uom='%s' (id=%s) | precio=%.4f %s | línea_id=%s" % (
+                    l.uom_id.name, l.uom_id.id,
+                    l.price_unit, self.currency_id.name,
+                    l.id,
+                )
+                for l in lineas_producto
+            ]
+            _logger.warning(
+                "DIAGNÓSTICO SAP PriceList [%s | id=%s] — "
+                "Producto '%s' (id=%s) SÍ existe en la lista pero con %s UdM(s) distintas:\n"
+                "  UdM pedida   : '%s' (id=%s)\n"
+                "  UdM base prod: '%s' (id=%s)\n"
+                "  Líneas en lista:\n%s",
+                self.name, self.id,
+                product.display_name, product.id,
+                len(lineas_producto),
+                uom_pedida.name if uom_pedida else "N/A",
+                uom_pedida.id if uom_pedida else "N/A",
+                base_uom.name if base_uom else "N/A",
+                base_uom.id if base_uom else "N/A",
+                "\n".join(detalle),
+            )
+        else:
+            _logger.warning(
+                "DIAGNÓSTICO SAP PriceList [%s | id=%s] — "
+                "Producto '%s' (id=%s) NO tiene NINGUNA línea en esta lista.\n"
+                "  UdM pedida   : '%s' (id=%s)\n"
+                "  UdM base prod: '%s' (id=%s)",
+                self.name, self.id,
+                product.display_name, product.id,
+                uom_pedida.name if uom_pedida else "N/A",
+                uom_pedida.id if uom_pedida else "N/A",
+                base_uom.name if base_uom else "N/A",
+                base_uom.id if base_uom else "N/A",
+            )
+
+        # ── B) Resumen de la lista completa (primeras 50 líneas) ────────
+        todas = Line.search([("price_list_id", "=", self.id)], limit=50)
+        total = Line.search_count([("price_list_id", "=", self.id)])
+
+        resumen = [
+            "  [%s] prod='%s' (id=%s) | uom='%s' (id=%s) | precio=%.4f" % (
+                l.id,
+                l.product_id.display_name, l.product_id.id,
+                l.uom_id.name, l.uom_id.id,
+                l.price_unit,
+            )
+            for l in todas
+        ]
+        _logger.warning(
+            "DIAGNÓSTICO SAP PriceList [%s | id=%s] — "
+            "Contenido de la lista (mostrando %s de %s líneas totales):\n%s",
+            self.name, self.id,
+            len(todas), total,
+            "\n".join(resumen) if resumen else "  (lista vacía)",
+        )
+
     # ------------------------------------------------------------------
     # API pública
     # ------------------------------------------------------------------
@@ -154,6 +228,7 @@ class SapPriceList(models.Model):
         base_uom = product.uom_id
 
         if not base_uom:
+            self._log_diagnostico_lista(product, uom, base_uom=None)
             _logger.warning(
                 "SAP PriceList [%s]: producto '%s' (id=%s) no tiene UdM base definida. "
                 "No es posible hacer fallback. Retorna None.",
@@ -163,6 +238,7 @@ class SapPriceList(models.Model):
 
         if base_uom.id == uom.id:
             # La UdM pedida ES la base y ya no se encontró en exacta → no hay precio
+            self._log_diagnostico_lista(product, uom, base_uom)
             _logger.warning(
                 "SAP PriceList [%s]: no hay precio para product='%s' (id=%s) "
                 "en uom base '%s' (id=%s). Retorna None.",
@@ -179,6 +255,7 @@ class SapPriceList(models.Model):
 
         # ── 2a) Verificar compatibilidad entre UdMs ─────────────────────
         if not self._uom_are_compatible(base_uom, uom):
+            self._log_diagnostico_lista(product, uom, base_uom)
             _logger.warning(
                 "SAP PriceList [%s]: UdM '%s' (id=%s) y UdM base '%s' (id=%s) "
                 "del producto '%s' NO son compatibles. No se puede convertir. Retorna None.",
@@ -200,6 +277,7 @@ class SapPriceList(models.Model):
         )
 
         if not base_line:
+            self._log_diagnostico_lista(product, uom, base_uom)
             _logger.warning(
                 "SAP PriceList [%s]: no hay precio para product='%s' (id=%s) "
                 "ni en uom '%s' (id=%s) ni en uom base '%s' (id=%s). Retorna None.",
