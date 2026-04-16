@@ -235,4 +235,3 @@ def _check_uom_compatibility(self):
                 rec.uom_id.name,
                 rec.uom_id.id,
             )
-```
