@@ -93,46 +93,43 @@ class SapPriceList(models.Model):
         _logger.info("¿base_uom tiene category_id?: %s", has_category_base)
         _logger.info("¿uom solicitada tiene category_id?: %s", has_category_uom)
 
-        if has_category_base and has_category_uom:
-            _logger.info(
-                "Categoría UdM base: %s",
-                base_uom.category_id.display_name if base_uom.category_id else "N/A",
+        _logger.info(
+            "Categoría UdM base: %s",
+            base_uom.category_id.display_name if base_uom.category_id else "N/A",
+        )
+        _logger.info(
+            "Categoría UdM solicitada: %s",
+            uom.category_id.display_name if uom.category_id else "N/A",
+        )
+
+        if (
+            base_uom.category_id
+            and uom.category_id
+            and base_uom.category_id == uom.category_id
+        ):
+            _logger.info("Las categorías de UdM coinciden. Buscando línea en UdM base...")
+
+            base_line = Line.search(
+                [
+                    ("price_list_id", "=", self.id),
+                    ("product_id", "=", product.id),
+                    ("uom_id", "=", base_uom.id),
+                ],
+                limit=1,
             )
-            _logger.info(
-                "Categoría UdM solicitada: %s",
-                uom.category_id.display_name if uom.category_id else "N/A",
-            )
 
-            if (
-                base_uom.category_id
-                and uom.category_id
-                and base_uom.category_id == uom.category_id
-            ):
-                _logger.info("Las categorías de UdM coinciden. Buscando línea en UdM base...")
+            _logger.info("Línea base encontrada: %s", base_line.id if base_line else "No")
 
-                base_line = Line.search(
-                    [
-                        ("price_list_id", "=", self.id),
-                        ("product_id", "=", product.id),
-                        ("uom_id", "=", base_uom.id),
-                    ],
-                    limit=1,
-                )
-
-                _logger.info("Línea base encontrada: %s", base_line.id if base_line else "No")
-
-                if base_line:
-                    converted_price = base_uom._compute_price(base_line.price_unit, uom)
-                    _logger.info("Precio base encontrado: %s", base_line.price_unit)
-                    _logger.info("Precio convertido a UdM solicitada: %s", converted_price)
-                    _logger.info("========== FIN _get_price (convertido) ==========")
-                    return converted_price
-                else:
-                    _logger.warning("No se encontró línea base para convertir.")
+            if base_line:
+                converted_price = base_uom._compute_price(base_line.price_unit, uom)
+                _logger.info("Precio base encontrado: %s", base_line.price_unit)
+                _logger.info("Precio convertido a UdM solicitada: %s", converted_price)
+                _logger.info("========== FIN _get_price (convertido) ==========")
+                return converted_price
             else:
-                _logger.warning("Las categorías de UdM no coinciden o alguna categoría está vacía.")
+                _logger.warning("No se encontró línea base para convertir.")
         else:
-            _logger.warning("Alguna de las UdM no tiene campo category_id en este build.")
+            _logger.warning("Las categorías de UdM no coinciden o alguna categoría está vacía.")
 
         _logger.warning("No se pudo determinar precio.")
         _logger.info("========== FIN _get_price (None) ==========")
