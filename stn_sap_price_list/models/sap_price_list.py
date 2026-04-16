@@ -81,10 +81,10 @@ class SapPriceList(models.Model):
             _logger.info("========== FIN _get_price (sin UdM base) ==========")
             return None
 
-        if base_uom.id == uom.id:
-            _logger.warning("La UdM solicitada es igual a la UdM base, pero no se encontró línea exacta.")
-            _logger.info("========== FIN _get_price (misma UdM sin línea) ==========")
-            return None
+        #if base_uom.id == uom.id:
+        #    _logger.warning("La UdM solicitada es igual a la UdM base, pero no se encontró línea exacta.")
+        #    _logger.info("========== FIN _get_price (misma UdM sin línea) ==========")
+        #    return None
 
         # Algunos builds (Odoo 19) ya no traen category_id en uom.uom
         has_category_base = "category_id" in base_uom._fields
