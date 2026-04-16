@@ -36,12 +36,51 @@ class SapPriceList(models.Model):
         copy=True,
     )
 
+    def _resolve_product_variant(self, product):
+        """Garantiza que siempre trabajemos con product.product.
+
+        Si se recibe un product.template, resuelve a su variante principal.
+        Si ya es product.product, lo devuelve sin cambios.
+
+        Args:
+            product: recordset de product.template o product.product.
+
+        Returns:
+            product.product | None: variante resuelta, o None si no existe.
+        """
+        if product._name == "product.template":
+            _logger.debug(
+                "_resolve_product_variant | Se recibió product.template (id=%s), "
+                "resolviendo a product.product.",
+                product.id,
+            )
+            variant = product.product_variant_id
+            if not variant:
+                _logger.warning(
+                    "_resolve_product_variant | product.template sin variante "
+                    "definida | template_id=%s | display_name=%s",
+                    product.id,
+                    product.display_name,
+                )
+                return None
+            _logger.debug(
+                "_resolve_product_variant | Variante resuelta | "
+                "product.product id=%s | display_name=%s",
+                variant.id,
+                variant.display_name,
+            )
+            return variant
+
+        # Ya es product.product, no se toca nada
+        return product
+
     def _get_price(self, product, uom):
         """Regresa el precio según Producto + UdM.
 
         Estrategia:
-        1) Exacto: busca línea con (product + uom) exactos.
-        2) Fallback: busca línea con UdM base del producto y convierte
+        1) Resolución: asegura que 'product' sea product.product (no template).
+        2) Exacto: busca línea con (product.product + uom) exactos.
+        3) Fallback: busca línea con UdM base del producto y convierte
            mediante _compute_price. Solo aplica si la UdM base existe
            y es distinta a la UdM solicitada.
 
@@ -51,11 +90,10 @@ class SapPriceList(models.Model):
         _compute_price; si son inconvertibles, Odoo lanzará su propio error.
 
         Si el producto no tiene UdM base definida (base_uom vacío),
-        se permite continuar: la búsqueda exacta del paso 1 ya cubrió
-        el caso y si no encontró nada, se retorna None sin bloquear.
+        se permite continuar sin bloquear.
 
         Args:
-            product (product.product): Producto a buscar.
+            product: product.product o product.template a buscar.
             uom (uom.uom): Unidad de medida deseada.
 
         Returns:
@@ -63,19 +101,27 @@ class SapPriceList(models.Model):
                           si no se encuentra ninguna coincidencia.
         """
         self.ensure_one()
+
+        # ── 1) Resolución product.template → product.product ─────────────────
+        product = self._resolve_product_variant(product)
+        if not product:
+            return None
+
         _logger.debug(
-            "_get_price | price_list=%s (id=%s) | product=%s (id=%s) | uom=%s (id=%s)",
+            "_get_price | price_list=%s (id=%s) | "
+            "product=%s (id=%s) [%s] | uom=%s (id=%s)",
             self.name,
             self.id,
             product.display_name,
             product.id,
+            product._name,   # confirma que ya es product.product
             uom.name,
             uom.id,
         )
 
         Line = self.env["sap.price.list.line"].sudo()
 
-        # ── Diagnóstico: líneas existentes para el producto en esta lista ────
+        # ── Diagnóstico: líneas existentes para el producto en esta lista ─────
         existing_lines = Line.search([
             ("price_list_id", "=", self.id),
             ("product_id", "=", product.id),
@@ -85,7 +131,7 @@ class SapPriceList(models.Model):
             [(l.uom_id.id, l.uom_id.name, l.price_unit) for l in existing_lines],
         )
 
-        # ── 1) Búsqueda exacta producto + UdM solicitada ──────────────────────
+        # ── 2) Búsqueda exacta producto + UdM solicitada ──────────────────────
         line = Line.search(
             [
                 ("price_list_id", "=", self.id),
@@ -106,11 +152,10 @@ class SapPriceList(models.Model):
             "_get_price | Sin línea exacta, evaluando fallback con UdM base del producto."
         )
 
-        # ── 2) Fallback: precio en UdM base + conversión ──────────────────────
+        # ── 3) Fallback: precio en UdM base + conversión ──────────────────────
         base_uom = product.uom_id
 
-        # Si el producto no tiene UdM base, no hay conversión posible.
-        # La búsqueda exacta del paso 1 ya cubrió este caso.
+        # Sin UdM base: no hay conversión posible, paso 1 ya cubrió este caso
         if not base_uom:
             _logger.warning(
                 "_get_price | Producto sin UdM base definida, no hay fallback | "
@@ -121,8 +166,7 @@ class SapPriceList(models.Model):
             )
             return None
 
-        # Si base_uom == uom solicitada, el paso 1 ya lo intentó sin éxito.
-        # No hay conversión que aplicar.
+        # UdM solicitada == UdM base: paso 2 ya lo intentó sin éxito
         if base_uom.id == uom.id:
             _logger.warning(
                 "_get_price | Sin precio exacto y UdM solicitada == UdM base, "
@@ -135,7 +179,7 @@ class SapPriceList(models.Model):
             )
             return None
 
-        # UdM base distinta a la solicitada: buscar línea en UdM base y convertir
+        # UdM base distinta a la solicitada: buscar en UdM base y convertir
         base_line = Line.search(
             [
                 ("price_list_id", "=", self.id),
