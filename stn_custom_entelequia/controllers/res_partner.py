@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from odoo import http, SUPERUSER_ID
 from odoo.http import request, Response
 import json
@@ -58,6 +58,7 @@ class ApiController(http.Controller):
         is_company_val = True
         address_type = 'contact'
 
+        # 1. Si tiene parent_id, ES HIJO (sin importar el valor de id_secondary)
         if input_parent_id:
             _logger.info(f"  >>> Tiene parent_id='{input_parent_id}' - ES HIJO")
             _logger.info(f"  >>> El id_secondary '{id_secondary}' es solo informativo (respaldo del padre)")
@@ -71,6 +72,7 @@ class ApiController(http.Controller):
             if parent_partner:
                 final_parent_id = parent_partner.id
                 is_company_val = False
+                
                 _logger.info(f"  >>> PADRE ENCONTRADO: ID={parent_partner.id}, Name='{parent_partner.name}'")
                 
                 if raw_type in valid_odoo_types:
@@ -85,6 +87,7 @@ class ApiController(http.Controller):
             _logger.info(f"  >>> NO tiene parent_id - ES PADRE")
             _logger.info(f"  >>> El id_secondary '{id_secondary}' es su identificador único")
         
+        # 2. Si no tiene parent_id, es contacto padre
         if not final_parent_id:
             if raw_type == 'company':
                 is_company_val = True
@@ -102,33 +105,6 @@ class ApiController(http.Controller):
         _logger.info("="*80)
         
         return is_company_val, final_parent_id, address_type
-
-    def _resolve_payment_term(self, sap_code_raw):
-        """
-        property_payment_term_id llega como código SAP.
-        Busca el account.payment.term por sap_payment_term_code y retorna (sap_code, payment_term).
-        """
-        if not sap_code_raw:
-            return False, False
-
-        sap_code = str(sap_code_raw)
-        _logger.info("================================================================================")
-        _logger.info("PROCESANDO property_payment_term_id (código SAP → búsqueda en Odoo)")
-        _logger.info("  - sap_code recibido (convertido a str): %s", sap_code)
-
-        payment_term = request.env['account.payment.term'].sudo().search(
-            [('sap_payment_term_code', '=', sap_code)],
-            limit=1
-        )
-
-        if payment_term:
-            _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
-                         payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
-        else:
-            _logger.warning("  - NO se encontró account.payment.term con sap_payment_term_code='%s'", sap_code)
-
-        _logger.info("================================================================================")
-        return sap_code, payment_term
 
     @http.route('/api/create_contact', type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False)
     def create_contact(self, **kwargs):
@@ -162,11 +138,6 @@ class ApiController(http.Controller):
                 if loc: 
                     locality_id = loc.id
 
-            # property_payment_term_id → viene como código SAP → buscar en Odoo
-            sap_code, payment_term = self._resolve_payment_term(
-                contact_data.get('property_payment_term_id')
-            )
-
             # Construcción de valores para Odoo
             vals = {
                 'name': contact_data.get('name'),
@@ -182,6 +153,9 @@ class ApiController(http.Controller):
                 'city': contact_data.get('city'),
                 'l10n_mx_edi_usage': contact_data.get('l10n_mx_edi_usage'),
                 'l10n_mx_edi_fiscal_regime': contact_data.get('l10n_mx_edi_fiscal_regime'),
+                'l10n_mx_edi_payment_method_id': int(contact_data.get('l10n_mx_edi_payment_method_id')),
+                'property_payment_term_id': int(contact_data.get('property_payment_term_id')),
+                
                 'vat': contact_data.get('vat'),
                 'ref': contact_data.get('ref'),
                 'l10n_mx_edi_locality_id': locality_id,
@@ -202,15 +176,10 @@ class ApiController(http.Controller):
                 'u_sap_credit_available': float(contact_data.get('credit_available') or 0.0),
                 'u_sap_use_credit_limit': bool(contact_data.get('use_partner_credit_limit', True)),
                 'u_is_sap_client': True,
+                # Siempre guardamos id_secondary como respaldo (tanto en padres como en hijos)
                 'id_secondary': id_secondary,
                 'lang': contact_data.get('lang', 'es_MX'),
             }
-
-            # l10n_mx_edi_payment_method_id → llega como ID directo de Odoo
-            if contact_data.get('l10n_mx_edi_payment_method_id'):
-                vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
-                _logger.info("  - l10n_mx_edi_payment_method_id (ID directo): %s", vals['l10n_mx_edi_payment_method_id'])
-
             # Agregar country_id si viene en el payload
             if 'country_id' in contact_data and contact_data.get('country_id'):
                 vals['country_id'] = int(contact_data.get('country_id'))
@@ -218,6 +187,13 @@ class ApiController(http.Controller):
             # Agregar state_id si viene en el payload
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 vals['state_id'] = int(contact_data.get('state_id'))
+            
+            # ✅ VALIDACIÓN PARA IDs (EVITA ERRORES)
+            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
+                vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
+
+            if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
+                vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
 
             # Buscar usuario por salesPersonCode y asignar user_id
             if 'salesPersonCode' in contact_data:
@@ -297,34 +273,13 @@ class ApiController(http.Controller):
                 existing.write(vals)
                 action = "updated"
                 contact_id = existing.id
-                partner_record = existing
             else:
                 _logger.info(f">>> EJECUTANDO: partner_env.create(vals)")
                 new_contact = partner_env.create(vals)
                 action = "created"
                 contact_id = new_contact.id
-                partner_record = new_contact
                 _logger.info(f">>> Nuevo contacto creado con ID: {contact_id}")
-
-            # Escribir property_payment_term_id con with_company
-            if payment_term:
-                try:
-                    company = partner_record.sudo().company_id or request.env['res.company'].sudo().search([], limit=1)
-                    _logger.info("================================================================================")
-                    _logger.info("ESCRIBIENDO property_payment_term_id con with_company (CREATE)")
-                    _logger.info("  - partner_record.id: %s", partner_record.id)
-                    _logger.info("  - company: id=%s | name=%s", company.id, company.name)
-                    _logger.info("  - sap_code: %s | payment_term.id: %s", sap_code, payment_term.id)
-
-                    partner_record.sudo().with_company(company).write({
-                        'x_studio_terminos_pago_sap_auxiliar': sap_code,
-                        'property_payment_term_id': payment_term.id,
-                    })
-                    _logger.info("  - ✅ x_studio_terminos_pago_sap_auxiliar='%s' y property_payment_term_id=%s escritos", sap_code, payment_term.id)
-                    _logger.info("================================================================================")
-                except Exception as e_pay:
-                    _logger.warning("  - ⚠️ No se pudo escribir término de pago: %s", str(e_pay))
-
+            
             _logger.info("\n" + "#"*100)
             _logger.info("### RESULTADO FINAL ###")
             _logger.info(f"### Acción: {action}")
@@ -369,12 +324,14 @@ class ApiController(http.Controller):
             existing = False
             
             if parent_id:
+                # ===== ES HIJO =====
                 _logger.info(f"UPDATE: Buscando hijo con name='{contact_data.get('name')}' y parent_id={parent_id}")
                 existing = partner_env.search([
                     ('name', '=', contact_data.get('name')),
                     ('parent_id', '=', parent_id)
                 ], limit=1)
             else:
+                # ===== ES PADRE =====
                 _logger.info(f"UPDATE: Buscando padre con id_secondary='{id_secondary}'")
                 existing = partner_env.search([
                     ('id_secondary', '=', id_secondary),
@@ -390,7 +347,7 @@ class ApiController(http.Controller):
                 'parent_id': parent_id,
                 'type': addr_type,
                 'u_is_sap_client': True,
-                'id_secondary': id_secondary,
+                'id_secondary': id_secondary,  # Actualizar id_secondary como respaldo
             }
             
             fields_to_map = {
@@ -420,35 +377,33 @@ class ApiController(http.Controller):
                 'credit_balance': 'u_sap_credit_balance',
                 'credit_available': 'u_sap_credit_available',
                 'use_partner_credit_limit': 'u_sap_use_credit_limit',
-                'l10n_mx_edi_usage': 'l10n_mx_edi_usage',
-                'l10n_mx_edi_fiscal_regime': 'l10n_mx_edi_fiscal_regime',
+                'l10n_mx_edi_usage': 'l10n_mx_edi_usage',                    # Uso CFDI
+                'l10n_mx_edi_fiscal_regime': 'l10n_mx_edi_fiscal_regime',    # Régimen Fiscal
             }
             
             for json_key, odoo_key in fields_to_map.items():
                 if json_key in contact_data:
                     value = contact_data[json_key]
+                    
                     if json_key in ['credit_limit', 'credit_balance', 'credit_available']:
                         value = float(value or 0.0)
                     elif json_key == 'use_partner_credit_limit':
                         value = bool(value)
+                    
                     update_vals[odoo_key] = value
-
-            # Country, State IDs
+            # Country, State, City IDs
             if 'country_id' in contact_data and contact_data.get('country_id'):
                 update_vals['country_id'] = int(contact_data.get('country_id'))
             
             if 'state_id' in contact_data and contact_data.get('state_id'):
                 update_vals['state_id'] = int(contact_data.get('state_id'))
-
-            # l10n_mx_edi_payment_method_id → llega como ID directo de Odoo
-            if contact_data.get('l10n_mx_edi_payment_method_id'):
+                
+            # Campos fiscales que son IDs
+            if 'l10n_mx_edi_payment_method_id' in contact_data and contact_data.get('l10n_mx_edi_payment_method_id'):
                 update_vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
-                _logger.info("  - l10n_mx_edi_payment_method_id (ID directo): %s", update_vals['l10n_mx_edi_payment_method_id'])
 
-            # property_payment_term_id → viene como código SAP → buscar en Odoo
-            sap_code, payment_term = self._resolve_payment_term(
-                contact_data.get('property_payment_term_id')
-            )
+            if 'property_payment_term_id' in contact_data and contact_data.get('property_payment_term_id'):
+                update_vals['property_payment_term_id'] = int(contact_data.get('property_payment_term_id'))
 
             if 'locality_name' in contact_data:
                 loc_name = contact_data.get('locality_name')
@@ -458,26 +413,7 @@ class ApiController(http.Controller):
                         update_vals['l10n_mx_edi_locality_id'] = loc.id
 
             existing.with_context(l10n_mx_edi_force_validate_vat=False).write(update_vals)
-
-            # Escribir property_payment_term_id con with_company
-            if payment_term:
-                try:
-                    company = existing.sudo().company_id or request.env['res.company'].sudo().search([], limit=1)
-                    _logger.info("================================================================================")
-                    _logger.info("ESCRIBIENDO property_payment_term_id con with_company (UPDATE)")
-                    _logger.info("  - existing.id: %s", existing.id)
-                    _logger.info("  - company: id=%s | name=%s", company.id, company.name)
-                    _logger.info("  - sap_code: %s | payment_term.id: %s", sap_code, payment_term.id)
-
-                    existing.sudo().with_company(company).write({
-                        'x_studio_terminos_pago_sap_auxiliar': sap_code,
-                        'property_payment_term_id': payment_term.id,
-                    })
-                    _logger.info("  - ✅ x_studio_terminos_pago_sap_auxiliar='%s' y property_payment_term_id=%s escritos", sap_code, payment_term.id)
-                    _logger.info("================================================================================")
-                except Exception as e_pay:
-                    _logger.warning("  - ⚠️ No se pudo escribir término de pago: %s", str(e_pay))
-
+            
             return self._create_response({
                 'status': 'success',
                 'contact_id': existing.id,
