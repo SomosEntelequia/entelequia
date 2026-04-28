@@ -3,6 +3,7 @@ import json
 import logging
 import requests
 from odoo import api, fields, models, _
+from markupsafe import Markup, escape
 
 _logger = logging.getLogger(__name__)
 
@@ -60,11 +61,17 @@ class ResPartner(models.Model):
             # 1. SINCRONIZAR PADRE
             _logger.info(f"--- DISPARO SAP PADRE: {target_parent.name} ---")
             payload_parent = target_parent._build_sap_payload(mode='parent')
-            resp_parent = self._send_to_sap_partner(url, payload_parent, headers)
+            resp_parent = target_parent._send_to_sap_partner(url, payload_parent, headers)
 
             if resp_parent and isinstance(resp_parent, dict) and resp_parent.get('cardCode'):
                 parent_code = resp_parent.get('cardCode')
                 target_parent.write({'id_secondary': parent_code, 'u_is_sap_client': True})
+                target_parent._post_sap_partner_chatter(
+                    "success",
+                    "Cliente sincronizado con SAP correctamente.",
+                    payload_parent,
+                    resp_parent,
+                )
                 self.env.cr.commit() 
 
                 # 2. SINCRONIZAR HIJOS
@@ -72,15 +79,34 @@ class ResPartner(models.Model):
                     _logger.info(f"--- DISPARO SAP HIJO: {child.name} ({child.type}) ---")
                     payload_child = child._build_sap_payload(mode='child')
                     if payload_child:
-                        resp_child = self._send_to_sap_partner(url, payload_child, headers)
+                        resp_child = child._send_to_sap_partner(url, payload_child, headers)
                         if resp_child and isinstance(resp_child, dict) and resp_child.get('cardCode'):
                             child.write({
                                 'id_secondary': resp_child.get('cardCode'),
                                 'u_is_sap_client': True
                             })
+                            child._post_sap_partner_chatter(
+                                "success",
+                                "Contacto/dirección sincronizado con SAP correctamente.",
+                                payload_child,
+                                resp_child,
+                            )
                             self.env.cr.commit()
+                        else:
+                            child._post_sap_partner_chatter(
+                                "error",
+                                "SAP no confirmó la sincronización del contacto/dirección.",
+                                payload_child,
+                                resp_child,
+                            )
             else:
                 _logger.error(f"Error en Padre {target_parent.name}")
+                target_parent._post_sap_partner_chatter(
+                    "error",
+                    "SAP no confirmó la sincronización del cliente.",
+                    payload_parent,
+                    resp_parent,
+                )
 
     def action_update_sap_contact(self):
         """Actualización manual: Actualiza el PADRE + TODOS sus hijos (actualiza existentes y crea nuevos)"""
@@ -94,6 +120,10 @@ class ResPartner(models.Model):
             # Verificar que el padre tenga id_secondary
             if not target_parent.id_secondary:
                 _logger.warning(f"⚠️ {target_parent.name} no tiene id_secondary, no se puede actualizar")
+                target_parent._post_sap_partner_chatter(
+                    "error",
+                    "No se puede actualizar en SAP porque el cliente no tiene id_secondary.",
+                )
                 continue
             
             _logger.info(f"=== ACTUALIZACIÓN COMPLETA: {target_parent.name} ===")
@@ -103,9 +133,15 @@ class ResPartner(models.Model):
             payload_parent = target_parent._build_sap_payload(mode='parent')
             
             if payload_parent:
-                resp_parent = self._send_to_sap_partner(url, payload_parent, headers)
+                resp_parent = target_parent._send_to_sap_partner(url, payload_parent, headers)
                 if resp_parent and isinstance(resp_parent, dict):
                     _logger.info(f"✅ Padre actualizado exitosamente")
+                    target_parent._post_sap_partner_chatter(
+                        "success",
+                        "Cliente actualizado en SAP correctamente.",
+                        payload_parent,
+                        resp_parent,
+                    )
                     
                     # 2. ACTUALIZAR/CREAR TODOS LOS HIJOS
                     for child in target_parent.child_ids:
@@ -113,7 +149,7 @@ class ResPartner(models.Model):
                         payload_child = child._build_sap_payload(mode='child')
                         
                         if payload_child:
-                            resp_child = self._send_to_sap_partner(url, payload_child, headers)
+                            resp_child = child._send_to_sap_partner(url, payload_child, headers)
                             if resp_child and isinstance(resp_child, dict):
                                 # Si SAP retorna un cardCode, guardarlo
                                 if resp_child.get('cardCode'):
@@ -129,8 +165,20 @@ class ResPartner(models.Model):
                                         'u_has_pending_changes': False
                                     })
                                 _logger.info(f"  ✅ Hijo {child.name} sincronizado")
+                                child._post_sap_partner_chatter(
+                                    "success",
+                                    "Contacto/dirección actualizado en SAP correctamente.",
+                                    payload_child,
+                                    resp_child,
+                                )
                             else:
                                 _logger.error(f"  ❌ Error al sincronizar hijo {child.name}")
+                                child._post_sap_partner_chatter(
+                                    "error",
+                                    "SAP no confirmó la actualización del contacto/dirección.",
+                                    payload_child,
+                                    resp_child,
+                                )
                     
                     # 3. QUITAR LA MARCA DE CAMBIOS PENDIENTES DEL PADRE
                     target_parent.write({
@@ -142,6 +190,12 @@ class ResPartner(models.Model):
                     _logger.info(f"✅ Actualización completa finalizada - Botón ocultado")
                 else:
                     _logger.error(f"❌ Error en actualización del padre {target_parent.name}")
+                    target_parent._post_sap_partner_chatter(
+                        "error",
+                        "SAP no confirmó la actualización del cliente.",
+                        payload_parent,
+                        resp_parent,
+                    )
 
     def _build_sap_payload(self, mode='parent'):
         """Construcción de JSON para SAP enviando el nombre del registro actual en el campo address"""
@@ -228,7 +282,42 @@ class ResPartner(models.Model):
             _logger.info(f"RESPONSE SAP [{response.status_code}]: {response.text}")
             if response.status_code in [200, 201]:
                 return response.json()
+            self._post_sap_partner_chatter(
+                "error",
+                f"Error al enviar a SAP. HTTP {response.status_code}.",
+                payload,
+                response.text,
+            )
             return False
         except Exception as e:
             _logger.error(f"Error conexión: {str(e)}")
+            self._post_sap_partner_chatter(
+                "error",
+                f"Error de conexión al enviar a SAP: {str(e)}",
+                payload,
+            )
             return False
+
+    def _post_sap_partner_chatter(self, status, message, payload=None, response=None):
+        """Publica la trazabilidad SAP en el chatter del contacto."""
+        for record in self:
+            title = "✅ SAP Business Partner" if status == "success" else "❌ SAP Business Partner"
+            body_parts = [
+                Markup("<b>%s</b><p>%s</p>") % (escape(title), escape(message))
+            ]
+            if payload is not None:
+                body_parts.append(
+                    Markup("<b>Payload enviado:</b><pre>%s</pre>") %
+                    escape(json.dumps(payload, indent=2, ensure_ascii=False))
+                )
+            if response is not None:
+                response_text = (
+                    json.dumps(response, indent=2, ensure_ascii=False)
+                    if isinstance(response, (dict, list))
+                    else str(response)
+                )
+                body_parts.append(
+                    Markup("<b>Respuesta SAP:</b><pre>%s</pre>") %
+                    escape(response_text)
+                )
+            record.message_post(body=Markup("").join(body_parts))

@@ -1,5 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 from odoo import models, fields, api
+from markupsafe import Markup, escape
 import json
 import logging
 import requests
@@ -45,6 +46,10 @@ class SaleOrder(models.Model):
             if not order.partner_id.u_is_sap_client:
                 _logger.warning(f"⚠️ Orden {order.name}: El cliente no ha sido sincronizado con el botón SAP.")
                 _logger.warning(f"   Necesitas sincronizar primero al cliente {order.partner_id.name}")
+                order._post_sap_order_chatter(
+                    "error",
+                    f"El cliente {order.partner_id.display_name} no está sincronizado con SAP.",
+                )
                 continue
 
             if not order.u_sap_id:
@@ -55,7 +60,7 @@ class SaleOrder(models.Model):
                     _logger.info(f"📤 PAYLOAD GENERADO PARA ORDEN {order.name}:")
                     _logger.info(json.dumps(payload_order, indent=2, ensure_ascii=False))
                     
-                    sap_response = self._send_to_sap(payload_order, url_order, "ORDEN")
+                    sap_response = order._send_to_sap(payload_order, url_order, "ORDEN")
                     
                     if sap_response and isinstance(sap_response, dict):
                         _logger.info(f"✅ RESPUESTA SAP EXITOSA: {sap_response}")
@@ -65,15 +70,35 @@ class SaleOrder(models.Model):
                             'u_sap_doc_num': str(sap_response.get('docNum')),
                             'u_estado': '0'
                         })
+                        order._post_sap_order_chatter(
+                            "success",
+                            "Orden enviada a SAP correctamente.",
+                            payload_order,
+                            sap_response,
+                        )
                     else:
                         _logger.error(f"❌ Error en respuesta SAP para orden {order.name}")
+                        order._post_sap_order_chatter(
+                            "error",
+                            "SAP no confirmó la creación de la orden.",
+                            payload_order,
+                            sap_response,
+                        )
                         
                 except Exception as e:
                     _logger.error(f"❌ EXCEPCIÓN al procesar orden {order.name}: {str(e)}")
                     import traceback
                     _logger.error(traceback.format_exc())
+                    order._post_sap_order_chatter(
+                        "error",
+                        f"Excepción al enviar la orden a SAP: {str(e)}",
+                    )
             else:
                 _logger.info(f"⏭️ Orden {order.name} ya tiene u_sap_id: {order.u_sap_id}, omitiendo envío")
+                order._post_sap_order_chatter(
+                    "success",
+                    f"La orden ya estaba sincronizada con SAP. DocEntry: {order.u_sap_id}.",
+                )
         
         _logger.info("=" * 80)
         _logger.info(f"✅ CONFIRMACIÓN COMPLETADA")
@@ -99,9 +124,27 @@ class SaleOrder(models.Model):
                     }
                 }
                 _logger.info(f"PAYLOAD CANCELACIÓN: {json.dumps(payload_update, indent=2, ensure_ascii=False)}")
-                self._send_to_sap(payload_update, url_patch, "CANCELACIÓN", method='PATCH')
+                sap_response = order._send_to_sap(payload_update, url_patch, "CANCELACIÓN", method='PATCH')
+                if sap_response:
+                    order._post_sap_order_chatter(
+                        "success",
+                        "Cancelación enviada a SAP correctamente.",
+                        payload_update,
+                        sap_response,
+                    )
+                else:
+                    order._post_sap_order_chatter(
+                        "error",
+                        "SAP no confirmó la cancelación de la orden.",
+                        payload_update,
+                        sap_response,
+                    )
             else:
                 _logger.warning(f"⚠️ Orden {order.name} no tiene u_sap_doc_num, no se puede cancelar en SAP")
+                order._post_sap_order_chatter(
+                    "error",
+                    "No se puede cancelar en SAP porque la orden no tiene número de folio SAP.",
+                )
         return res
 
     def _send_to_sap(self, payload, url, tipo_doc, method='POST'):
@@ -121,12 +164,47 @@ class SaleOrder(models.Model):
                 return response.json() if response.text else True
             else:
                 _logger.error(f"❌ Error SAP {tipo_doc}: Status {response.status_code}")
+                self._post_sap_order_chatter(
+                    "error",
+                    f"Error SAP {tipo_doc}. HTTP {response.status_code}.",
+                    payload,
+                    response.text,
+                )
                 return False
         except Exception as e:
             _logger.error(f"❌ ERROR SAP {tipo_doc}: {str(e)}")
             import traceback
             _logger.error(traceback.format_exc())
+            self._post_sap_order_chatter(
+                "error",
+                f"Error de conexión SAP {tipo_doc}: {str(e)}",
+                payload,
+            )
             return False
+
+    def _post_sap_order_chatter(self, status, message, payload=None, response=None):
+        """Publica la trazabilidad SAP en el chatter de la orden."""
+        for order in self:
+            title = "✅ SAP Orden de Venta" if status == "success" else "❌ SAP Orden de Venta"
+            body_parts = [
+                Markup("<b>%s</b><p>%s</p>") % (escape(title), escape(message))
+            ]
+            if payload is not None:
+                body_parts.append(
+                    Markup("<b>Payload enviado:</b><pre>%s</pre>") %
+                    escape(json.dumps(payload, indent=2, ensure_ascii=False))
+                )
+            if response is not None:
+                response_text = (
+                    json.dumps(response, indent=2, ensure_ascii=False)
+                    if isinstance(response, (dict, list))
+                    else str(response)
+                )
+                body_parts.append(
+                    Markup("<b>Respuesta SAP:</b><pre>%s</pre>") %
+                    escape(response_text)
+                )
+            order.message_post(body=Markup("").join(body_parts))
 
     def _build_sap_order_payload(self):
             self.ensure_one()
