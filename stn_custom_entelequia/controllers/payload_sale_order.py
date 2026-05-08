@@ -346,7 +346,7 @@ class SaleOrder(models.Model):
             "PromisedDate": promised_date_str,
             "PaymentTermCode": self.payment_term_id.sap_payment_term_code or '',
             "Currency": self.currency_id.name,
-            "Comments": (self.u_sap_notes or self.note or "")[:250],
+            "Comments": (self.u_sap_notes or "")[:250],
             "salesPersonCode": sales_person_code,
             "lines": lines,
             "numRef": self.u_numRef or "",
