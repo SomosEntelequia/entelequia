@@ -27,7 +27,13 @@ class SaleOrder(models.Model):
         domain="[('parent_id', '=', partner_id), ('type', '=', 'invoice'), ('id_secondary', '!=', False)]",
         help="Dirección de facturación que se enviará a SAP (PayToCode). Solo muestra direcciones que ya tienen id_secondary."
     )
-
+    partner_contact_id_sap = fields.Many2one(
+        'res.partner',
+        string='Dirección de Contacto',
+        domain="[('parent_id', '=', partner_id), ('type', '=', 'contact'), ('id_secondary', '!=', False)]",
+        help="Dirección de contacto que se enviará a SAP. Solo muestra direcciones que ya tienen id_secondary."
+    )
+    
     def _convert_to_mexico_date(self, dt_utc, field_name="fecha"):
         """
         Convierte un datetime UTC a fecha en zona horaria México City.
@@ -322,6 +328,7 @@ class SaleOrder(models.Model):
         # =============================
         ship_to_code = ""
         pay_to_code = ""
+        contact_to_code = ""
 
         if self.partner_shipping_id_sap and self.partner_shipping_id_sap.id_secondary:
             ship_to_code = self.partner_shipping_id_sap.name
@@ -330,7 +337,10 @@ class SaleOrder(models.Model):
         if self.partner_invoice_id_sap and self.partner_invoice_id_sap.id_secondary:
             pay_to_code = self.partner_invoice_id_sap.name
             _logger.info(f"💰 PayTo (Address): {pay_to_code}")
-
+        if self.partner_contact_id_sap and self.partner_contact_id_sap.id_secondary:
+            contact_to_code = self.partner_contact_id_sap.name
+            _logger.info(f"💰 Contact (person): {contact_to_code}")
+            
         # =============================
         # Vendedor
         # =============================
@@ -363,6 +373,10 @@ class SaleOrder(models.Model):
             "docnum_odoo": self.name,
             "Address2": ship_to_code,
             "Address": pay_to_code,
+            #Campos nuevos SAP
+            "hora_inicio": self.x_studio_hora_entrega_inicio_venta or "",
+            "hora_fin": self.x_studio_hora_entrega_fin_venta or "",
+            "Contact": contact_to_code,
         }
 
         if main_usage:
