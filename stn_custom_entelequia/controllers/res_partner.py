@@ -115,7 +115,7 @@ class ApiController(http.Controller):
                 if nota:
                     body += Markup("<p><small>%s</small></p>") % nota
 
-            partner.message_post(
+            partner.with_user(SUPERUSER_ID).sudo().message_post(
                 body=body,
                 message_type='comment',
                 subtype_xmlid='mail.mt_note',
@@ -207,6 +207,14 @@ class ApiController(http.Controller):
     def create_contact(self, **kwargs):
         if request.httprequest.method == 'OPTIONS':
             return self._create_response({}, 200)
+
+        # auth='none' no trae usuario: sin esto env.user y env.company quedan vacíos
+        # (truena message_post y los campos por compañía se guardan sin compañía)
+        request.update_env(user=SUPERUSER_ID)
+        _logger.info(
+            f"[API v3] env -> uid={request.env.uid} | user={request.env.user.name} | "
+            f"company={request.env.company.name}"
+        )
 
         try:
             data = json.loads(request.httprequest.data)
@@ -422,6 +430,14 @@ class ApiController(http.Controller):
     def update_contact(self, **kwargs):
         if request.httprequest.method == 'OPTIONS':
             return self._create_response({}, 200)
+
+        # auth='none' no trae usuario: sin esto env.user y env.company quedan vacíos
+        # (truena message_post y los campos por compañía se guardan sin compañía)
+        request.update_env(user=SUPERUSER_ID)
+        _logger.info(
+            f"[API v3] env -> uid={request.env.uid} | user={request.env.user.name} | "
+            f"company={request.env.company.name}"
+        )
 
         try:
             data = json.loads(request.httprequest.data)
