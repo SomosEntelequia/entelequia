@@ -38,38 +38,50 @@ class ApiController(http.Controller):
     # =========================================================================
     # CONVERSIÓN: código SAP → account.payment.term
     # =========================================================================
-    def _resolve_payment_term(self, contact_data):
+    def _resolve_payment_term(self, sap_code_raw):
         """
-        El payload manda en 'property_payment_term_id' el CÓDIGO SAP del término
-        de pago (ej. 22), NO el ID de Odoo. Se busca en account.payment.term por
-        el campo sap_payment_term_code.
+        property_payment_term_id llega como código SAP.
+        Busca el account.payment.term por sap_payment_term_code y retorna (sap_code, payment_term).
+        """
+        if not sap_code_raw:
+            return False, False
 
-        Devuelve (term | None, nota_para_chatter | None):
-          - No viene la llave        → (None, None)          no se toca el campo
-          - Viene vacía / null       → (None, nota)          no se toca el campo
-          - Código sin coincidencia  → (None, nota)          no se toca el campo
-          - Código encontrado        → (term, nota)          se asigna term.id
+        sap_code = str(sap_code_raw)
+        _logger.info("================================================================================")
+        _logger.info("PROCESANDO property_payment_term_id (código SAP → búsqueda en Odoo)")
+        _logger.info("  - sap_code recibido (convertido a str): %s", sap_code)
+
+        payment_term = request.env['account.payment.term'].sudo().search(
+            [('sap_payment_term_code', '=', sap_code)],
+            limit=1
+        )
+
+        if payment_term:
+            _logger.info("  - payment_term ENCONTRADO: id=%s | name=%s | sap_code=%s",
+                         payment_term.id, payment_term.name, payment_term.sap_payment_term_code)
+        else:
+            _logger.warning("  - NO se encontró account.payment.term con sap_payment_term_code='%s'", sap_code)
+
+        _logger.info("================================================================================")
+        return sap_code, payment_term
+
+    def _payment_term_from_payload(self, contact_data):
+        """
+        Envoltorio de _resolve_payment_term para contactos: además del término
+        devuelve la nota que se publica en el chatter.
+        Retorna (payment_term | False, nota | None).
         """
         if 'property_payment_term_id' not in contact_data:
-            return None, None
+            return False, None
 
         raw = contact_data.get('property_payment_term_id')
-        if raw in (None, '', False):
-            _logger.warning(f"   ⚠️ Código SAP de término de pago vacío: {raw!r}")
-            return None, f"Código SAP de término de pago vacío ({raw!r}); no se modificó."
+        sap_code, payment_term = self._resolve_payment_term(raw)
 
-        # Se busca como texto: funciona si sap_payment_term_code es Char o Integer
-        code = str(raw).strip()
-        term = request.env['account.payment.term'].sudo().search([
-            ('sap_payment_term_code', '=', code)
-        ], limit=1)
-
-        if not term:
-            _logger.warning(f"   ⚠️ No existe término de pago con sap_payment_term_code={code}")
-            return None, f"Código SAP {code} sin término de pago asociado en Odoo; no se modificó."
-
-        _logger.info(f"   💳 Término de pago: código SAP {code} → {term.display_name} (id={term.id})")
-        return term, f"Código SAP de término de pago {code} → {term.display_name}"
+        if not sap_code:
+            return False, f"Código SAP de término de pago vacío ({raw!r}); no se modificó."
+        if not payment_term:
+            return False, f"Código SAP {sap_code} sin término de pago asociado en Odoo; no se modificó."
+        return payment_term, f"Código SAP de término de pago {sap_code} → {payment_term.display_name}"
 
     # =========================================================================
     # CHATTER: snapshot de valores y publicación de cambios
@@ -91,6 +103,32 @@ class ApiController(http.Controller):
             else:
                 snap[fname] = '' if val in (False, None) else str(val)
         return snap
+
+    def _post_create_chatter(self, partner, values, origen, notas=None):
+        """Publica en el chatter los valores con los que se creó el contacto por API."""
+        try:
+            rows = []
+            for fname, val in values.items():
+                if val in ('', None):
+                    continue
+                label = partner._fields[fname].string
+                rows.append(Markup("<li><b>%s</b>: %s</li>") % (label, val))
+
+            body = Markup("<p><b>Creación vía API SAP</b> (%s)</p>") % origen
+            if rows:
+                body += Markup("<ul>%s</ul>") % Markup('').join(rows)
+
+            for nota in (notas or []):
+                if nota:
+                    body += Markup("<p><small>%s</small></p>") % nota
+
+            partner.with_user(SUPERUSER_ID).sudo().message_post(
+                body=body,
+                message_type='comment',
+                subtype_xmlid='mail.mt_note',
+            )
+        except Exception as e:
+            _logger.warning(f"⚠️ No se pudo publicar en chatter del partner {partner.id}: {e}")
 
     def _post_update_chatter(self, partner, before, after, origen, notas=None):
         """Publica en el chatter los cambios recibidos por API."""
@@ -297,7 +335,7 @@ class ApiController(http.Controller):
                 vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
 
             # Término de pago: llega el CÓDIGO SAP, se convierte al término de Odoo
-            payment_term, payment_term_note = self._resolve_payment_term(contact_data)
+            payment_term, payment_term_note = self._payment_term_from_payload(contact_data)
             if payment_term:
                 vals['property_payment_term_id'] = payment_term.id
 
@@ -392,13 +430,13 @@ class ApiController(http.Controller):
                 action = "created"
                 contact_id = new_contact.id
                 _logger.info(f">>> Nuevo contacto creado con ID: {contact_id}")
-                # Si hubo problema con el código SAP, dejarlo visible en el chatter
-                if payment_term_note and not payment_term:
-                    new_contact.message_post(
-                        body=Markup("<p><small>%s</small></p>") % payment_term_note,
-                        message_type='comment',
-                        subtype_xmlid='mail.mt_note',
-                    )
+                # Registrar en chatter los valores con los que se creó
+                created_values = self._snapshot(new_contact, vals.keys())
+                self._post_create_chatter(
+                    new_contact, created_values,
+                    'POST /api/create_contact',
+                    notas=[payment_term_note],
+                )
 
             _logger.info("\n" + "#" * 100)
             _logger.info("### RESULTADO FINAL ###")
@@ -541,7 +579,7 @@ class ApiController(http.Controller):
                 update_vals['l10n_mx_edi_payment_method_id'] = int(contact_data.get('l10n_mx_edi_payment_method_id'))
 
             # Término de pago: llega el CÓDIGO SAP, se convierte al término de Odoo
-            payment_term, payment_term_note = self._resolve_payment_term(contact_data)
+            payment_term, payment_term_note = self._payment_term_from_payload(contact_data)
             if payment_term:
                 update_vals['property_payment_term_id'] = payment_term.id
 
