@@ -20,7 +20,12 @@
                         invisible="u_has_pending_changes == False or parent_id != False" />
                 </header>
             </xpath>
-
+            
+            <xpath expr="//field[@name='property_payment_term_id']"
+                   position="attributes">
+                <attribute name="readonly">1</attribute>
+            </xpath>
+            
             <xpath expr="//field[@name='category_id']" position="after">
                 <field name="id_secondary" string="ID Secundario SAP" readonly="1" />
                 <field name="u_is_sap_client" string="Es Cliente SAP" widget="boolean_toggle" />
