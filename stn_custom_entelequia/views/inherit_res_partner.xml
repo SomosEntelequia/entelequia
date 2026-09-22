@@ -23,7 +23,7 @@
             
             <xpath expr="//field[@name='property_payment_term_id']"
                    position="attributes">
-                <attribute name="readonly">1</attribute>
+                <attribute name="readonly">True</attribute>
             </xpath>
             
             <xpath expr="//field[@name='category_id']" position="after">
