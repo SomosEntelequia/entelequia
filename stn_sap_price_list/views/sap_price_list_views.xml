@@ -42,7 +42,8 @@
                     <notebook>
                         <page string="Líneas">
                             <field name="line_ids">
-                                <list editable="bottom">
+                                <list editable="bottom" open_form_view="1">
+                                    <field name="id_secundario_sap_line"/>
                                     <field name="product_id"/>
                                     <field name="uom_id"/>
                                     <field name="price_unit"/>
@@ -51,6 +52,28 @@
                         </page>
                     </notebook>
                 </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_sap_price_list_line_form" model="ir.ui.view">
+        <field name="name">sap.price.list.line.form</field>
+        <field name="model">sap.price.list.line</field>
+        <field name="arch" type="xml">
+            <form string="Línea de lista de precio SAP">
+                <sheet>
+                    <group>
+                        <field name="price_list_id"/>
+                        <field name="id_secundario_sap_line"/>
+                        <field name="product_id"/>
+                        <field name="uom_id"/>
+                        <field name="price_unit"/>
+                        <field name="currency_id" invisible="1"/>
+                        <field name="company_id" groups="base.group_multi_company"/>
+                    </group>
+                </sheet>
+                <chatter/>
             </form>
         </field>
     </record>
